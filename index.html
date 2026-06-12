@@ -303,6 +303,18 @@ function App() {
   }, [pickState, custState, tasks]);
 
   // ── Pick helpers ──────────────────────────────────────────
+  function batchToggleSettlement(updates) {
+    // updates = {sk: newProducts[], ...}
+    setPickState(prev => {
+      const next = {...prev};
+      Object.keys(updates).forEach(sk => {
+        next[sk] = {...prev[sk], products: updates[sk]};
+        fbWritePick(sk, updates[sk]);
+      });
+      return next;
+    });
+  }
+
   function toggleItem(sk, id, field) {
     setPickState(prev => {
       const products = prev[sk].products.map(p => {
@@ -446,8 +458,15 @@ function App() {
 
   function resetAll() {
     if (!window.confirm("לאפס את כל נתוני הליקוט?")) return;
-    const p = initPickState(), c = initCustState();
-    setPickState(p); setCustState(c); save({pick:p,cust:c});
+    const p = initPickState(), c = initCustState(), t = [];
+    setPickState(p); setCustState(c); setTasks(t);
+    save({pick:p, cust:c, tasks:t});
+    if (USE_FIREBASE && window._fbDb) {
+      fbBlocking.current = true;
+      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t})
+        .catch(e => console.warn("FB reset:", e));
+      setTimeout(() => { fbBlocking.current = false; }, 2000);
+    }
   }
 
   // ── Global stats ──────────────────────────────────────────
@@ -614,6 +633,7 @@ function App() {
       onSetCustItemMissingQty={(g,cid,iid,qty)=>setCustItemMissingQty(g,cid,iid,qty)}
       onSelectSettlement={s=>{setActiveSettlement(s);setScreen("settlement");}}
       onBack={()=>setScreen("home")}
+          onBatchToggle={batchToggleSettlement}
     />;
   }
 
@@ -931,7 +951,7 @@ function SettlementScreen({settlement,sk,state,color,isPersonal,customers,onTogg
 }
 
 // ── Cluster Screen ─────────────────────────────────────────────
-function ClusterScreen({cluster,color,state,tab,onTabChange,pickState,custState,onToggle,onSetField,onMarkDone,onSetPicker,onToggleSettlement,onSetAnyField,onToggleCustItem,onToggleCustDone,onSetCustNote,onSetCustItemMissingQty,onSelectSettlement,onBack}) {
+function ClusterScreen({cluster,color,state,tab,onTabChange,pickState,custState,onToggle,onSetField,onMarkDone,onSetPicker,onToggleSettlement,onSetAnyField,onToggleCustItem,onToggleCustDone,onSetCustNote,onSetCustItemMissingQty,onSelectSettlement,onBack,onBatchToggle}) {
   // Total from cluster aggregate (canonical)
   const total = Math.round(state.products.reduce((a,p)=>a+p.qty,0));
   // Picked: all settlements use settlement products state (no custState dependency)
@@ -1021,6 +1041,7 @@ function ClusterScreen({cluster,color,state,tab,onTabChange,pickState,custState,
       {!!(state.pickerName||"").split(",").filter(p=>p.trim()).length && tab==="distribution" && <>
         <DistributionTable cluster={cluster} color={color} pickState={pickState} custState={custState}
           onToggleSettlementItem={onToggleSettlement}
+          onBatchToggle={onBatchToggle}
           onSetSettlementField={(sk,id,f,v)=>onSetAnyField(sk,id,f,v)}
           onToggleCustItem={onToggleCustItem} onToggleCustDone={onToggleCustDone}
           onSetCustNote={onSetCustNote} onSetCustItemMissingQty={onSetCustItemMissingQty}/>
@@ -1044,7 +1065,7 @@ function ClusterScreen({cluster,color,state,tab,onTabChange,pickState,custState,
 }
 
 // ── Distribution Table ─────────────────────────────────────────
-function DistributionTable({cluster,color,pickState,custState,onToggleSettlementItem,onSetSettlementField,onToggleCustItem,onToggleCustDone,onSetCustNote,onSetCustItemMissingQty}) {
+function DistributionTable({cluster,color,pickState,custState,onToggleSettlementItem,onSetSettlementField,onToggleCustItem,onToggleCustDone,onSetCustNote,onSetCustItemMissingQty,onBatchToggle}) {
   const [search,setSearch] = useState("");
   const [activeSettlement,setActiveSettlement] = useState(null);
 
@@ -1071,10 +1092,23 @@ function DistributionTable({cluster,color,pickState,custState,onToggleSettlement
       return {s, prod:ss?.products.find(p=>p.name===name)||null};
     }).filter(({prod})=>prod&&prod.qty>0);
     const allSet = relevant.every(({prod})=>prod[field]);
+    // Batch: update all settlements at once, then write each to Firebase once
+    const updates = {};
     relevant.forEach(({s,prod}) => {
-      if (prod[field]===!allSet) return;
-      onToggleSettlementItem("settlement_"+s,prod.id,field);
+      if (prod[field]===!allSet) return; // already in target state
+      const sk = "settlement_"+s;
+      const products = pickState[sk].products.map(p => {
+        if (p.id !== prod.id) return p;
+        const upd = {...p, [field]: !allSet};
+        if (field==="picked" && upd.picked) { upd.missing=false; upd.missingQty=0; }
+        if (field==="missing" && upd.missing) upd.picked=false;
+        return upd;
+      });
+      updates[sk] = products;
     });
+    if (Object.keys(updates).length === 0) return;
+    // Single setPickState for all settlements
+    onBatchToggle(updates);
   }
   function toggleOne(name,s,field) {
     const ss=pickState["settlement_"+s];
