@@ -333,16 +333,18 @@ function App() {
         setCustState(() => mergeLoadedCustState(fixed, initCustState()));
       });
 
-      // Listen on reset
+      // Listen on reset — directly apply fresh state when remote reset is detected
       db.ref("likut/" + SK + "/_resetAt").on("value", snap => {
         const remoteReset = snap.val();
         if (!remoteReset || remoteReset <= resetAtRef.current) return;
-        // Remote reset is newer — apply full reset
         resetAtRef.current = remoteReset;
-        db.ref("likut/" + SK).once("value").then(fullSnap => {
-          const d = fullSnap.val();
-          if (d) applyRemote(d);
-        });
+        // Apply fresh empty state immediately (don't wait for full DB read)
+        const freshPick = initPickState();
+        const freshCust = initCustState();
+        setPickState(freshPick);
+        setCustState(freshCust);
+        setTasks([]);
+        save({pick: freshPick, cust: freshCust, tasks: []});
       });
     } catch(e) { console.warn("FB init:", e); }
   }, []);
@@ -515,8 +517,10 @@ function App() {
       const now = Date.now();
       resetAtRef.current = now;
       pendingEchos.current = 0;
-      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now})
-        .then(() => window._fbDb.ref("likut/" + SK + "/_resetAt").set(now))
+      // Write _resetAt first — other devices reset immediately on receiving it
+      // Then write fresh state so new joins start clean
+      window._fbDb.ref("likut/" + SK + "/_resetAt").set(now)
+        .then(() => window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now}))
         .catch(e => console.warn("FB reset:", e));
     }
   }
@@ -1059,6 +1063,9 @@ function ClusterScreen({cluster,color,state,tab,onTabChange,pickState,custState,
                   parts[idx2]=e.target.value;
                   onSetPicker(parts.map(p=>p.trim()).join(","));
                 }}
+                onKeyDown={e=>e.stopPropagation()}
+                onKeyUp={e=>e.stopPropagation()}
+                onKeyPress={e=>e.stopPropagation()}
               />
             );
           })}
