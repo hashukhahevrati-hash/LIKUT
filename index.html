@@ -54,7 +54,20 @@ const FIREBASE_CONFIG = {
 const USE_FIREBASE = FIREBASE_CONFIG.apiKey !== "REPLACE_API_KEY";
 
 // ── Storage ──────────────────────────────────────────────────
-function load() { try { const s=localStorage.getItem(SK); return s?JSON.parse(s):null; } catch{return null;} }
+function load() {
+  try {
+    const s = localStorage.getItem(SK);
+    if (!s) return null;
+    const d = JSON.parse(s);
+    // Validate basic structure
+    if (d && d.pick && typeof d.pick !== 'object') { localStorage.removeItem(SK); return null; }
+    if (d && d.cust && typeof d.cust !== 'object') { localStorage.removeItem(SK); return null; }
+    return d;
+  } catch(e) { 
+    localStorage.removeItem(SK); // clear corrupt data
+    return null; 
+  }
+}
 function save(s) { try { localStorage.setItem(SK,JSON.stringify(s)); } catch{} }
 
 // ── Init state ──────────────────────────────────────────────
@@ -144,7 +157,7 @@ function getSettlementDone(settlement, pickState, custState) {
     const sk = "settlement_"+settlement;
     if (pickState[sk]?.done) return true;
     const ss = pickState[sk];
-    if (ss && ss.products.length > 0 && ss.products.every(p => p.picked || p.missing)) return true;
+    if (ss && ss.products.length > 0 && toArr(ss.products).every(p => p.picked || p.missing)) return true;
     // Done if all customers are done
     const custs = custState[custGroupKey(settlement)] || [];
     if (custs.length > 0 && custs.every(c => c.done)) return true;
@@ -156,7 +169,7 @@ function getSettlementDone(settlement, pickState, custState) {
   if (pickState["settlement_"+settlement]?.done) return true;
   // OR all its products are picked/missing
   const ss = pickState["settlement_"+settlement];
-  if (ss && ss.products.length > 0 && ss.products.every(p=>p.picked||p.missing)) return true;
+  if (ss && ss.products.length > 0 && toArr(ss.products).every(p=>p.picked||p.missing)) return true;
   return false;
 }
 
@@ -253,7 +266,10 @@ function App() {
   const [showProductsModal, setShowProductsModal] = useState(false);
   const [tasks, setTasks] = useState(() => {
     const saved = load();
-    return saved?.tasks || [];
+    if (!saved?.tasks) return [];
+    // Normalize: Firebase might convert arrays to objects
+    if (Array.isArray(saved.tasks)) return saved.tasks;
+    return Object.keys(saved.tasks).sort((a,b)=>+a-+b).map(k=>saved.tasks[k]);
   });
   const [newTaskText, setNewTaskText] = useState("");
 
@@ -613,7 +629,7 @@ function App() {
     const cs = pickState["cluster_"+c.id];
     if (!cs) return;
     // For each cluster product: check cluster aggregate AND settlement products
-    cs.products.forEach(p => {
+    toArr(cs.products).forEach(p => {
       totalItems += Math.round(p.qty);
       let isPicked = p.picked;
       let missingQty = 0;
@@ -638,7 +654,7 @@ function App() {
   // 2. לוחמי הגטאות — not in any cluster
   const _lSs = pickState["settlement_לוחמי הגטאות"];
   if (_lSs) {
-    _lSs.products.forEach(p => {
+    toArr(_lSs.products).forEach(p => {
       totalItems += Math.round(p.qty);
       if (p.picked) pickedItems += Math.round(p.qty);
       if (p.missing && !p.picked) missingItems += Math.round(p.qty);
@@ -651,7 +667,7 @@ function App() {
   // 2b. בנק מזרחי — SPECIAL but not in any cluster
   const _bmSs = pickState["settlement_בנק מזרחי"];
   if (_bmSs) {
-    _bmSs.products.forEach(p => {
+    toArr(_bmSs.products).forEach(p => {
       totalItems += Math.round(p.qty);
       if (p.picked) pickedItems += Math.round(p.qty);
       if (p.missing && !p.picked) missingItems += Math.round(p.qty);
@@ -668,7 +684,7 @@ function App() {
   REMAINING.forEach(s => {
     const ss = pickState["settlement_"+s];
     if (!ss) return;
-    ss.products.forEach(p => {
+    toArr(ss.products).forEach(p => {
       totalItems += Math.round(p.qty);
       if (p.picked) pickedItems += Math.round(p.qty);
       if (p.missing && !p.picked) missingItems += Math.round(p.qty);
@@ -789,7 +805,7 @@ function App() {
             </span>}
           </div>
           {(() => {
-            const openTasks = tasks.filter(t=>t.status!=="done").length;
+            const openTasks = toArr(tasks).filter(t=>t.status!=="done").length;
             return openTasks > 0
               ? <div onClick={()=>goToDashboard("tasks")} style={{background:"#dc2626",border:"1px solid #fca5a5",borderRadius:8,padding:"3px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:5}}>
                   <span style={{fontSize:13}}>📋</span>
@@ -819,9 +835,9 @@ function App() {
           <div style={{fontSize:18,fontWeight:700,color:"#dc2626"}}>{missingItems}</div>
           <div style={{fontSize:10,color:"#dc2626",fontWeight:600}}>חסרים ←</div>
         </div>
-        <div onClick={()=>goToDashboard("tasks")} style={{flex:1,background:tasks.filter(t=>t.status!=="done").length>0?"#faf5ff":"#f9fafb",borderRadius:10,padding:"6px 4px",textAlign:"center",cursor:"pointer",borderTop:"3px solid #7c3aed"}}>
+        <div onClick={()=>goToDashboard("tasks")} style={{flex:1,background:toArr(tasks).filter(t=>t.status!=="done").length>0?"#faf5ff":"#f9fafb",borderRadius:10,padding:"6px 4px",textAlign:"center",cursor:"pointer",borderTop:"3px solid #7c3aed"}}>
           <div style={{fontSize:18}}>📋</div>
-          <div style={{fontSize:18,fontWeight:700,color:"#7c3aed"}}>{tasks.filter(t=>t.status!=="done").length}</div>
+          <div style={{fontSize:18,fontWeight:700,color:"#7c3aed"}}>{toArr(tasks).filter(t=>t.status!=="done").length}</div>
           <div style={{fontSize:10,color:"#7c3aed",fontWeight:600}}>משימות ←</div>
         </div>
       </div>
@@ -833,14 +849,14 @@ function App() {
           const col = CLUSTER_COLORS[i];
           const ck = "cluster_"+c.id;
           const cs = pickState[ck];
-          const total = Math.round(cs.products.reduce((a,p)=>a+p.qty,0));
+          const total = Math.round(toArr(cs.products).reduce((a,p)=>a+p.qty,0));
           // Picked: all settlements use settlement products state (no custState dependency)
           let picked = 0;
           c.settlements.forEach(s=>{
             const sk2="settlement_"+s; const ss2=pickState[sk2];
             if(!ss2) return;
-            ss2.products.forEach(p=>{
-              const cp=cs.products.find(cp=>cp.name===p.name);
+            toArr(ss2.products).forEach(p=>{
+              const cp=toArr(cs.products).find(cp=>cp.name===p.name);
               if(p.picked||(cp&&cp.picked)) picked+=p.qty;
             });
           });
@@ -855,7 +871,7 @@ function App() {
             if (!ss2 || ss2.products.length===0) return false;
             return ss2.products.every(p=>p.picked||p.missing);
           }).length;
-          const regMissing = cs.products.filter(p=>p.missing).length;
+          const regMissing = toArr(cs.products).filter(p=>p.missing).length;
           const custMissing = c.settlements.reduce((sum,s) => {
             if (!isPersonal(s)) return sum;
             return sum + (custState[custGroupKey(s)]||[]).reduce((a,cu)=>a+cu.items.filter(i=>i.missing).length,0);
@@ -929,9 +945,9 @@ function App() {
         {REMAINING.filter(s=>!Object.keys(PERSONAL_PACKING).includes(s)).map(s => {
           const ss = pickState["settlement_"+s];
           if (!ss) return null;
-          const totalQty = Math.round(ss.products.reduce((a,p)=>a+p.qty,0));
-          const pickedQty = Math.round(ss.products.filter(p=>p.picked).reduce((a,p)=>a+p.qty,0));
-          const missing3 = ss.products.filter(p=>p.missing).length;
+          const totalQty = Math.round(toArr(ss.products).reduce((a,p)=>a+p.qty,0));
+          const pickedQty = Math.round(toArr(ss.products).filter(p=>p.picked).reduce((a,p)=>a+p.qty,0));
+          const missing3 = toArr(ss.products).filter(p=>p.missing).length;
           const pct3 = Math.round(pickedQty/Math.max(totalQty,1)*100);
           return (
             <div key={s} style={{background:"#fff",border:"2px solid "+(ss.done?"#16a34a":"#e5e7eb"),borderRadius:12,padding:"10px 12px",cursor:"pointer",boxShadow:"0 1px 3px rgba(0,0,0,0.05)"}}
@@ -1089,7 +1105,7 @@ function ClusterScreen({cluster,color,state,tab,onTabChange,pickState,custState,
     const sk = "settlement_"+s;
     const ss = pickState[sk];
     if (ss) {
-      ss.products.forEach(p => {
+      toArr(ss.products).forEach(p => {
         const cp = state.products.find(cp=>cp.name===p.name);
         if (p.picked || (cp && cp.picked)) picked += p.qty;
       });
@@ -1392,11 +1408,11 @@ function SettlementCards({cluster,pickState,custState,color,onSelect}) {
         const ss=pickState[sk];
         if(!ss) return null;
         // All settlements use settlement products state — no custState dependency in cluster context
-        const done=ss.done||ss.products.every(p=>p.picked||p.missing);
+        const done=ss.done||toArr(ss.products).every(p=>p.picked||p.missing);
         const isPers=isPersonal(s);
-        const picked=Math.round(ss.products.filter(p=>p.picked).reduce((a,p)=>a+p.qty,0));
-        const total=Math.round(ss.products.reduce((a,p)=>a+p.qty,0));
-        const missing=ss.products.filter(p=>p.missing).length;
+        const picked=Math.round(toArr(ss.products).filter(p=>p.picked).reduce((a,p)=>a+p.qty,0));
+        const total=Math.round(toArr(ss.products).reduce((a,p)=>a+p.qty,0));
+        const missing=toArr(ss.products).filter(p=>p.missing).length;
         const pct=Math.round(picked/Math.max(total,1)*100);
         return (
           <div key={s} style={{background:"#fff",border:"2px solid "+(done?color.accent:color.border),borderRadius:12,padding:"14px",marginBottom:10,cursor:"pointer",boxShadow:"0 1px 4px "+color.accent+"15"}}
@@ -1589,7 +1605,7 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
   CLUSTERS.forEach(c=>{
     const cs=pickState["cluster_"+c.id];
     if(!cs) return;
-    cs.products.forEach(p=>{
+    toArr(cs.products).forEach(p=>{
       totalI+=p.qty;
       let isPicked=p.picked;
       c.settlements.filter(s=>!isPersonal(s)).forEach(s=>{
@@ -1607,8 +1623,8 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
   REMAINING.forEach(s=>{
     const ss=pickState["settlement_"+s];
     if(!ss) return;
-    totalI+=ss.products.reduce((a,p)=>a+p.qty,0);
-    pickedI+=ss.products.filter(p=>p.picked).reduce((a,p)=>a+p.qty,0);
+    totalI+=toArr(ss.products).reduce((a,p)=>a+p.qty,0);
+    pickedI+=toArr(ss.products).filter(p=>p.picked).reduce((a,p)=>a+p.qty,0);
   });
   totalI=Math.round(totalI); pickedI=Math.round(pickedI);
 
@@ -1623,9 +1639,9 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
       const sk="settlement_"+s;
       const ss=pickState[sk];
       if (!ss) return;
-      cs.products.forEach(cp => {
+      toArr(cs.products).forEach(cp => {
         if (!cp.missing) return;
-        const sp=ss.products.find(p=>p.name===cp.name);
+        const sp=toArr(ss.products).find(p=>p.name===cp.name);
         if (!sp || sp.missing) return; // already counted from settlement
         // Cluster has missing but settlement doesn't yet - count from cluster
         const entry={label:s,picker,customer:null,productName:cp.name,qty:cp.missingQty>0?cp.missingQty:cp.qty,totalQty:cp.qty,unit:cp.unit||"",note:cp.note,isCustomer:false};
@@ -1647,12 +1663,12 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
       if(isDone&&custNP.length>0) doneWithUntracked.push({settlement,picker,items:custNP,isCustomer:true});
       // חוסרים ברמת המוצר (מהפריסה) עבור יישובים אישיים
       const ss=pickState[k];
-      if(ss) ss.products.forEach(p=>{
+      if(ss) toArr(ss.products).forEach(p=>{
         if(p.missing&&!p.picked) allMissing.push({label:settlement,picker,customer:null,productName:p.name,qty:p.missingQty>0?p.missingQty:p.qty,totalQty:p.qty,unit:p.unit,note:p.note,isCustomer:false});
       });
     } else {
       const prodNP=[];
-      pickState[k].products.forEach(p=>{
+      toArr(pickState[k].products).forEach(p=>{
         const entry={label:settlement,picker,customer:null,productName:p.name,qty:p.missingQty>0?p.missingQty:p.qty,totalQty:p.qty,unit:p.unit,note:p.note,isCustomer:false};
         if(p.missing&&!p.picked) allMissing.push(entry);
         else if(!p.picked&&!p.missing){allNotPicked.push(entry);prodNP.push(entry);}
@@ -1719,7 +1735,7 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
           {t:"__products__",icon:"📦",val:pickedI+"/"+totalI,lbl:totalMissingQty>0?"⚠️ "+Math.round(totalMissingQty)+" חסרים":"פריטים",col:totalMissingQty>0?"#dc2626":"#2563eb"},
           {t:"missing",icon:"⚠️",val:Math.round(totalMissingQty),lbl:"חסרים",col:"#dc2626"},
           {t:"notpicked",icon:"🟡",val:notPickedI,lbl:"ממתינים",col:"#f59e0b"},
-          {t:"tasks",icon:"📋",val:(tasks||[]).filter(t=>t.status!=="done").length,lbl:"משימות",col:"#7c3aed"},
+          {t:"tasks",icon:"📋",val:toArr(tasks||[]).filter(t=>t.status!=="done").length,lbl:"משימות",col:"#7c3aed"},
           {t:"personal_missing",icon:"🎁",val:personalMissingList.length,lbl:"אריזה אישית",col:"#0d9488"},
         ].map((box,i)=>(
           <div key={i} onClick={()=>box.t==="__products__"?setShowProdModal(true):onTabChange(box.t)} style={{flex:1,borderRadius:10,padding:"6px 2px",textAlign:"center",cursor:"pointer",background:activeTab===box.t?"#f0f9ff":"#f9fafb",border:"2px solid "+(activeTab===box.t?box.col:"transparent"),borderTop:"3px solid "+box.col}}>
@@ -1810,19 +1826,19 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
           </div>
 
           {/* 4. משימות */}
-          <div onClick={()=>onTabChange("tasks")} style={{background:(tasks||[]).filter(t=>t.status!=="done").length>0?"#faf5ff":"#f0fdf4",border:"1px solid "+((tasks||[]).filter(t=>t.status!=="done").length>0?"#ddd6fe":"#86efac"),borderRadius:14,padding:"14px",marginBottom:10,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div onClick={()=>onTabChange("tasks")} style={{background:toArr(tasks||[]).filter(t=>t.status!=="done").length>0?"#faf5ff":"#f0fdf4",border:"1px solid "+(toArr(tasks||[]).filter(t=>t.status!=="done").length>0?"#ddd6fe":"#86efac"),borderRadius:14,padding:"14px",marginBottom:10,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
-              <div style={{fontWeight:800,fontSize:15,color:(tasks||[]).filter(t=>t.status!=="done").length>0?"#6d28d9":"#15803d"}}>📋 משימות</div>
+              <div style={{fontWeight:800,fontSize:15,color:toArr(tasks||[]).filter(t=>t.status!=="done").length>0?"#6d28d9":"#15803d"}}>📋 משימות</div>
               <div style={{display:"flex",gap:8,marginTop:4,fontSize:12}}>
-                {(tasks||[]).filter(t=>t.status==="open").length>0&&<span style={{color:"#dc2626",fontWeight:600}}>🔴 {(tasks||[]).filter(t=>t.status==="open").length}</span>}
-                {(tasks||[]).filter(t=>t.status==="inprogress").length>0&&<span style={{color:"#f59e0b",fontWeight:600}}>🟡 {(tasks||[]).filter(t=>t.status==="inprogress").length}</span>}
-                {(tasks||[]).filter(t=>t.status==="done").length>0&&<span style={{color:"#16a34a",fontWeight:600}}>🟢 {(tasks||[]).filter(t=>t.status==="done").length}</span>}
-                {(tasks||[]).length===0&&<span style={{color:"#9ca3af"}}>אין משימות</span>}
+                {toArr(tasks||[]).filter(t=>t.status==="open").length>0&&<span style={{color:"#dc2626",fontWeight:600}}>🔴 {toArr(tasks||[]).filter(t=>t.status==="open").length}</span>}
+                {toArr(tasks||[]).filter(t=>t.status==="inprogress").length>0&&<span style={{color:"#f59e0b",fontWeight:600}}>🟡 {toArr(tasks||[]).filter(t=>t.status==="inprogress").length}</span>}
+                {toArr(tasks||[]).filter(t=>t.status==="done").length>0&&<span style={{color:"#16a34a",fontWeight:600}}>🟢 {toArr(tasks||[]).filter(t=>t.status==="done").length}</span>}
+                {toArr(tasks||[]).length===0&&<span style={{color:"#9ca3af"}}>אין משימות</span>}
               </div>
             </div>
             <div style={{textAlign:"center"}}>
-              <div style={{fontSize:32,fontWeight:800,color:(tasks||[]).filter(t=>t.status!=="done").length>0?"#7c3aed":"#16a34a"}}>
-                {(tasks||[]).filter(t=>t.status!=="done").length}
+              <div style={{fontSize:32,fontWeight:800,color:toArr(tasks||[]).filter(t=>t.status!=="done").length>0?"#7c3aed":"#16a34a"}}>
+                {toArr(tasks||[]).filter(t=>t.status!=="done").length}
               </div>
               <div style={{fontSize:10,color:"#9ca3af"}}>← פירוט</div>
             </div>
@@ -2107,7 +2123,7 @@ function ProductsModal({pickState, custState, onClose, onMarkMissing}) {
   // From ALL settlement products (including personal settlements)
   Object.keys(pickState).filter(k=>k.startsWith("settlement_")).forEach(k=>{
     const s = k.replace("settlement_","");
-    pickState[k].products.forEach(p => {
+    toArr(pickState[k].products).forEach(p => {
       if (!productMap[p.name]) productMap[p.name] = {name:p.name, unit:p.unit, totalQty:0, pickedQty:0, missingQty:0};
       productMap[p.name].totalQty += p.qty;
       if (p.picked) productMap[p.name].pickedQty += p.qty;
@@ -2254,9 +2270,9 @@ function TaskRow({task, onSetStatus, onDelete}) {
 
 function TasksPanel({tasks,onAdd,onSetStatus,onDelete}) {
   const [text,setText] = useState("");
-  const open = (tasks||[]).filter(t=>t.status==="open");
-  const prog = (tasks||[]).filter(t=>t.status==="inprogress");
-  const done = (tasks||[]).filter(t=>t.status==="done");
+  const open = toArr(tasks||[]).filter(t=>t.status==="open");
+  const prog = toArr(tasks||[]).filter(t=>t.status==="inprogress");
+  const done = toArr(tasks||[]).filter(t=>t.status==="done");
 
   return (
     <div style={{paddingBottom:60}}>
@@ -2284,7 +2300,7 @@ function TasksPanel({tasks,onAdd,onSetStatus,onDelete}) {
         <div style={{fontSize:12,fontWeight:700,color:"#16a34a",marginBottom:8,marginTop:12}}>🟢 בוצע ({done.length})</div>
         {done.map(t=><TaskRow key={t.id} task={t} onSetStatus={onSetStatus} onDelete={onDelete}/>)}
       </>}
-      {(tasks||[]).length===0&&<div style={{textAlign:"center",color:"#9ca3af",padding:"40px 0",fontSize:14}}>אין משימות. כתוב משימה למעלה.</div>}
+      {toArr(tasks||[]).length===0&&<div style={{textAlign:"center",color:"#9ca3af",padding:"40px 0",fontSize:14}}>אין משימות. כתוב משימה למעלה.</div>}
     </div>
   );
 }
