@@ -288,12 +288,15 @@ function App() {
       window._fbDb = db;
       db.ref(".info/connected").on("value", s => setFbConnected(!!s.val()));
       db.ref("likut/" + SK).on("value", snap => {
-        if (fbBlocking.current) return; // skip echo of own write
         const d = snap.val();
         if (!d) return;
+        // Always apply remote RESET, even if we're blocking own-write echoes
+        const isRemoteReset = d._resetAt && d._resetAt > resetAtRef.current;
+        if (fbBlocking.current && !isRemoteReset) return; // skip echo of own write only
         // Ignore remote data that predates our local reset
         if (d._resetAt && d._resetAt < resetAtRef.current) return;
         fbBlocking.current = true;
+        if (isRemoteReset) resetAtRef.current = d._resetAt; // adopt remote reset timestamp
         applyRemote(d);
         setTimeout(() => { fbBlocking.current = false; }, 2000);
       });
