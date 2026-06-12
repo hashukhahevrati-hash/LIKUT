@@ -910,7 +910,8 @@ function SettlementScreen({settlement,sk,state,color,isPersonal,customers,onTogg
       <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",background:color.bg,borderBottom:"1px solid "+color.border}}>
         <span style={{fontSize:12,color:color.dark,fontWeight:600}}>👷 מלקט:</span>
         <input style={{flex:1,border:"1px solid "+color.border,borderRadius:8,padding:"5px 10px",fontSize:13,fontFamily:"inherit",direction:"rtl",background:"#fff"}}
-          placeholder="שם מלקט..." value={state.pickerName||""} onChange={e=>onSetPicker(e.target.value)}/>
+          placeholder="שם מלקט..." value={state.pickerName||""} onChange={e=>onSetPicker(e.target.value)}
+          onKeyDown={e=>e.stopPropagation()} onKeyUp={e=>e.stopPropagation()} onKeyPress={e=>e.stopPropagation()}/>
       </div>
       {!state.pickerName&&(
         <div style={{background:"#fef3c7",borderBottom:"2px solid #fde68a",padding:"14px 16px",display:"flex",alignItems:"center",gap:10}}>
@@ -928,7 +929,8 @@ function SettlementScreen({settlement,sk,state,color,isPersonal,customers,onTogg
           </Btn>
         ))}
         <input style={{flex:1,border:"1px solid #e5e7eb",borderRadius:8,padding:"4px 10px",fontSize:12,fontFamily:"inherit",direction:"rtl",minWidth:70,opacity:state.pickerName?1:0.4}}
-          placeholder="חיפוש..." value={search} onChange={e=>state.pickerName&&setSearch(e.target.value)} readOnly={!state.pickerName}/>
+          placeholder="חיפוש..." value={search} onChange={e=>state.pickerName&&setSearch(e.target.value)} readOnly={!state.pickerName}
+          onKeyDown={e=>e.stopPropagation()} onKeyUp={e=>e.stopPropagation()} onKeyPress={e=>e.stopPropagation()}/>
       </div>
       <div style={{padding:"8px 12px 80px",position:"relative"}}>
         {!state.pickerName&&(
