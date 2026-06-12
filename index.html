@@ -248,11 +248,15 @@ function App() {
     save(d);
   }
 
-  // Granular Firebase writes — only changed settlement/group
+  // Granular Firebase writes — debounced so rapid toggles merge into one write
   function fbWritePick(sk, products) {
     if (!USE_FIREBASE || !window._fbDb) return;
-    window._fbDb.ref("likut/" + SK + "/pick/" + sk + "/products")
-      .set(products).catch(e => console.warn("FB:", e));
+    if (!window._fbPickTimers) window._fbPickTimers = {};
+    if (window._fbPickTimers[sk]) clearTimeout(window._fbPickTimers[sk]);
+    window._fbPickTimers[sk] = setTimeout(() => {
+      window._fbDb.ref("likut/" + SK + "/pick/" + sk + "/products")
+        .set(products).catch(e => console.warn("FB:", e));
+    }, 300);
   }
   function fbWritePickField(sk, field, val) {
     if (!USE_FIREBASE || !window._fbDb) return;
@@ -261,8 +265,12 @@ function App() {
   }
   function fbWriteCust(group, arr) {
     if (!USE_FIREBASE || !window._fbDb) return;
-    window._fbDb.ref("likut/" + SK + "/cust/" + group)
-      .set(arr).catch(e => console.warn("FB:", e));
+    if (!window._fbCustTimers) window._fbCustTimers = {};
+    if (window._fbCustTimers[group]) clearTimeout(window._fbCustTimers[group]);
+    window._fbCustTimers[group] = setTimeout(() => {
+      window._fbDb.ref("likut/" + SK + "/cust/" + group)
+        .set(arr).catch(e => console.warn("FB:", e));
+    }, 300);
   }
 
   // Init Firebase once
@@ -284,7 +292,7 @@ function App() {
         if (!d) return;
         fbBlocking.current = true;
         applyRemote(d);
-        setTimeout(() => { fbBlocking.current = false; }, 500);
+        setTimeout(() => { fbBlocking.current = false; }, 2000);
       });
     } catch(e) { console.warn("FB init:", e); }
   }, []);
