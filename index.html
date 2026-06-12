@@ -215,7 +215,8 @@ function App() {
   // ── Real-time sync ────────────────────────────────────────
   const [fbConnected, setFbConnected] = useState(false);
   const resetAtRef = React.useRef(0);
-  const lastWriteRef = React.useRef(0); // timestamp of our last write to Firebase
+  const sessionId = React.useRef(Math.random().toString(36).slice(2,8)); // unique per browser tab
+  const pendingEchos = React.useRef(0); // count of writes we sent, not yet echoed back
 
   // Fix Firebase array→object conversion
   function toArr(v) {
@@ -256,9 +257,12 @@ function App() {
     if (!window._fbPickTimers) window._fbPickTimers = {};
     if (window._fbPickTimers[sk]) clearTimeout(window._fbPickTimers[sk]);
     window._fbPickTimers[sk] = setTimeout(() => {
-      lastWriteRef.current = Date.now();
-      window._fbDb.ref("likut/" + SK + "/pick/" + sk + "/products")
-        .set(products).catch(e => console.warn("FB:", e));
+      pendingEchos.current++;
+      window._fbDb.ref("likut/" + SK + "/pick/" + sk).update({
+        products: products,
+        _sid: sessionId.current,
+        _ts: Date.now()
+      }).catch(e => console.warn("FB:", e));
     }, 300);
   }
   function fbWritePickField(sk, field, val) {
@@ -271,9 +275,12 @@ function App() {
     if (!window._fbCustTimers) window._fbCustTimers = {};
     if (window._fbCustTimers[group]) clearTimeout(window._fbCustTimers[group]);
     window._fbCustTimers[group] = setTimeout(() => {
-      lastWriteRef.current = Date.now();
+      pendingEchos.current++;
       window._fbDb.ref("likut/" + SK + "/cust/" + group)
         .set(arr).catch(e => console.warn("FB:", e));
+      window._fbDb.ref("likut/" + SK + "/_meta").update({
+        _sid: sessionId.current, _ts: Date.now()
+      }).catch(e => {});
     }, 300);
   }
 
@@ -289,17 +296,53 @@ function App() {
       const db = firebase.database(app);
       window._fbDb = db;
       db.ref(".info/connected").on("value", s => setFbConnected(!!s.val()));
-      db.ref("likut/" + SK).on("value", snap => {
-        const d = snap.val();
-        if (!d) return;
-        // Handle remote reset: always apply if newer than our local reset
-        const isRemoteReset = d._resetAt && d._resetAt > resetAtRef.current;
-        if (isRemoteReset) { resetAtRef.current = d._resetAt; applyRemote(d); return; }
-        // Ignore data older than our own reset
-        if (d._resetAt && d._resetAt < resetAtRef.current) return;
-        // Skip echo of our own recent write (within 1500ms)
-        if (Date.now() - lastWriteRef.current < 1500) return;
-        applyRemote(d);
+      // Listen on pick changes — per settlement, so we can identify the sender
+      db.ref("likut/" + SK + "/pick").on("value", snap => {
+        const pickData = snap.val();
+        if (!pickData) return;
+        // Check if this was sent by us (echo) — skip if so
+        let allOurs = true;
+        Object.values(pickData).forEach(entry => {
+          if (entry._sid && entry._sid !== sessionId.current) allOurs = false;
+        });
+        if (allOurs && pendingEchos.current > 0) {
+          pendingEchos.current = Math.max(0, pendingEchos.current - 1);
+          return; // skip own echo
+        }
+        pendingEchos.current = 0;
+        // Apply only pick changes
+        setPickState(prev => {
+          const next = {...prev};
+          Object.keys(pickData).forEach(sk => {
+            if (!next[sk]) return;
+            const entry = pickData[sk];
+            const products = toArr(entry.products);
+            if (products.length > 0) {
+              next[sk] = {...next[sk], ...entry, products};
+            }
+          });
+          return next;
+        });
+      });
+
+      // Listen on cust changes
+      db.ref("likut/" + SK + "/cust").on("value", snap => {
+        const custData = snap.val();
+        if (!custData) return;
+        const fixed = normCust(custData);
+        setCustState(() => mergeLoadedCustState(fixed, initCustState()));
+      });
+
+      // Listen on reset
+      db.ref("likut/" + SK + "/_resetAt").on("value", snap => {
+        const remoteReset = snap.val();
+        if (!remoteReset || remoteReset <= resetAtRef.current) return;
+        // Remote reset is newer — apply full reset
+        resetAtRef.current = remoteReset;
+        db.ref("likut/" + SK).once("value").then(fullSnap => {
+          const d = fullSnap.val();
+          if (d) applyRemote(d);
+        });
       });
     } catch(e) { console.warn("FB init:", e); }
   }, []);
@@ -471,8 +514,9 @@ function App() {
     if (USE_FIREBASE && window._fbDb) {
       const now = Date.now();
       resetAtRef.current = now;
-      lastWriteRef.current = now;
+      pendingEchos.current = 0;
       window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now})
+        .then(() => window._fbDb.ref("likut/" + SK + "/_resetAt").set(now))
         .catch(e => console.warn("FB reset:", e));
     }
   }
