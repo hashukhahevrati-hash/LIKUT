@@ -267,6 +267,7 @@ function App() {
   }
   function fbWritePickField(sk, field, val) {
     if (!USE_FIREBASE || !window._fbDb) return;
+    pendingEchos.current++;
     window._fbDb.ref("likut/" + SK + "/pick/" + sk + "/" + field)
       .set(val).catch(e => console.warn("FB:", e));
   }
