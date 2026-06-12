@@ -209,6 +209,17 @@ function App() {
   const [pickState, setPickState] = useState(() => {
     const saved = load();
     if (!saved?.pick) return initPickState();
+    // Normalize saved pick: fix Firebase-converted arrays (objects with numeric keys)
+    try {
+      Object.keys(saved.pick).forEach(k => {
+        if (saved.pick[k] && saved.pick[k].products) {
+          const p = saved.pick[k].products;
+          if (!Array.isArray(p)) {
+            saved.pick[k].products = Object.keys(p).sort((a,b)=>+a-+b).map(i=>p[i]);
+          }
+        }
+      });
+    } catch(e) { return initPickState(); }
     // Merge: ensure all required settlement_ and cluster_ keys exist
     const fresh = initPickState();
     const merged = {...saved.pick};
@@ -220,7 +231,23 @@ function App() {
   const [custState, setCustState] = useState(() => {
     const saved = load();
     const fresh = initCustState();
-    return saved?.cust ? mergeLoadedCustState(saved.cust, fresh) : fresh;
+    if (!saved?.cust) return fresh;
+    try {
+      // Normalize saved cust: fix Firebase-converted arrays
+      Object.keys(saved.cust).forEach(g => {
+        if (!Array.isArray(saved.cust[g])) {
+          const v = saved.cust[g];
+          saved.cust[g] = Object.keys(v).sort((a,b)=>+a-+b).map(i=>v[i]);
+        }
+        saved.cust[g].forEach(c => {
+          if (c && c.items && !Array.isArray(c.items)) {
+            const it = c.items;
+            c.items = Object.keys(it).sort((a,b)=>+a-+b).map(i=>it[i]);
+          }
+        });
+      });
+      return mergeLoadedCustState(saved.cust, fresh);
+    } catch(e) { return fresh; }
   });
   const [dashTab, setDashTab] = useState("overview");
   const [showProductsModal, setShowProductsModal] = useState(false);
