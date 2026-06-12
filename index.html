@@ -258,31 +258,31 @@ function App() {
     if (!window._fbPickTimers) window._fbPickTimers = {};
     if (window._fbPickTimers[sk]) clearTimeout(window._fbPickTimers[sk]);
     window._fbPickTimers[sk] = setTimeout(() => {
-      pendingEchos.current++;
-      window._fbDb.ref("likut/" + SK + "/pick/" + sk).update({
-        products: products,
-        _sid: sessionId.current,
-        _ts: Date.now()
-      }).catch(e => console.warn("FB:", e));
+      const update = {};
+      update["pick/" + sk + "/products"] = products;
+      update["_sid"] = sessionId.current;
+      update["_ts"] = Date.now();
+      window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
     }, 300);
   }
   function fbWritePickField(sk, field, val) {
     if (!USE_FIREBASE || !window._fbDb) return;
-    pendingEchos.current++;
-    window._fbDb.ref("likut/" + SK + "/pick/" + sk + "/" + field)
-      .set(val).catch(e => console.warn("FB:", e));
+    const update = {};
+    update["pick/" + sk + "/" + field] = val;
+    update["_sid"] = sessionId.current;
+    update["_ts"] = Date.now();
+    window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
   }
   function fbWriteCust(group, arr) {
     if (!USE_FIREBASE || !window._fbDb) return;
     if (!window._fbCustTimers) window._fbCustTimers = {};
     if (window._fbCustTimers[group]) clearTimeout(window._fbCustTimers[group]);
     window._fbCustTimers[group] = setTimeout(() => {
-      pendingEchos.current++;
-      window._fbDb.ref("likut/" + SK + "/cust/" + group)
-        .set(arr).catch(e => console.warn("FB:", e));
-      window._fbDb.ref("likut/" + SK + "/_meta").update({
-        _sid: sessionId.current, _ts: Date.now()
-      }).catch(e => {});
+      const update = {};
+      update["cust/" + group] = arr;
+      update["_sid"] = sessionId.current;
+      update["_ts"] = Date.now();
+      window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
     }, 300);
   }
 
@@ -298,61 +298,36 @@ function App() {
       const db = firebase.database(app);
       window._fbDb = db;
       db.ref(".info/connected").on("value", s => setFbConnected(!!s.val()));
-      // Listen on pick changes — per settlement, so we can identify the sender
-      db.ref("likut/" + SK + "/pick").on("value", snap => {
-        if (justReset.current) return; // skip all FB data for 3s after local reset
-        const pickData = snap.val();
-        if (!pickData) return;
-        // Count how many entries were written by someone else
-        let foreignCount = 0;
-        Object.values(pickData).forEach(entry => {
-          if (entry._sid && entry._sid !== sessionId.current) foreignCount++;
-        });
-        // If ALL entries are ours (or no _sid), this is our echo — skip
-        if (foreignCount === 0 && pendingEchos.current > 0) {
-          pendingEchos.current = Math.max(0, pendingEchos.current - 1);
+
+      // Single root listener — simplest and most reliable approach
+      db.ref("likut/" + SK).on("value", snap => {
+        const d = snap.val();
+        if (!d) return;
+        // Skip our own echo (we stamped _sid on every write)
+        if (d._sid === sessionId.current) return;
+        // Handle remote reset
+        if (d._resetAt && d._resetAt > resetAtRef.current) {
+          resetAtRef.current = d._resetAt;
+          const freshPick = initPickState();
+          const freshCust = initCustState();
+          setPickState(freshPick);
+          setCustState(freshCust);
+          setTasks([]);
+          save({pick: freshPick, cust: freshCust, tasks: []});
           return;
         }
-        pendingEchos.current = 0;
-        // Apply only entries written by OTHER devices (foreignCount > 0)
-        // or ALL entries if we have no pending echos
-        setPickState(prev => {
-          const next = {...prev};
-          Object.keys(pickData).forEach(sk => {
-            if (!next[sk]) return;
-            const entry = pickData[sk];
-            // Skip entries that are OUR echo (our _sid, pending echos)
-            if (entry._sid === sessionId.current && foreignCount === 0) return;
-            const products = toArr(entry.products);
-            if (products && products.length > 0) {
-              next[sk] = {...next[sk], ...entry, products};
-            }
-          });
-          return next;
+        // Don't apply data older than our last reset
+        if (d._resetAt && d._resetAt < resetAtRef.current) return;
+        // Apply remote state
+        if (d.pick) setPickState(() => {
+          const fixed = normPick(d.pick);
+          const fresh = initPickState();
+          Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
+          return fixed;
         });
-      });
-
-      // Listen on cust changes
-      db.ref("likut/" + SK + "/cust").on("value", snap => {
-        if (justReset.current) return;
-        const custData = snap.val();
-        if (!custData) return;
-        const fixed = normCust(custData);
-        setCustState(() => mergeLoadedCustState(fixed, initCustState()));
-      });
-
-      // Listen on reset — directly apply fresh state when remote reset is detected
-      db.ref("likut/" + SK + "/_resetAt").on("value", snap => {
-        const remoteReset = snap.val();
-        if (!remoteReset || remoteReset <= resetAtRef.current) return;
-        resetAtRef.current = remoteReset;
-        // Apply fresh empty state immediately (don't wait for full DB read)
-        const freshPick = initPickState();
-        const freshCust = initCustState();
-        setPickState(freshPick);
-        setCustState(freshCust);
-        setTasks([]);
-        save({pick: freshPick, cust: freshCust, tasks: []});
+        if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
+        if (d.tasks) setTasks(toArr(d.tasks));
+        save(d);
       });
     } catch(e) { console.warn("FB init:", e); }
   }, []);
@@ -529,9 +504,11 @@ function App() {
       setTimeout(() => { justReset.current = false; }, 4000); // block FB reads for 4s
       // Write _resetAt first — other devices reset immediately on receiving it
       // Then write fresh state so new joins start clean
-      window._fbDb.ref("likut/" + SK + "/_resetAt").set(now)
-        .then(() => window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now}))
-        .catch(e => console.warn("FB reset:", e));
+      // Write full reset with _sid so THIS device skips its own echo
+      window._fbDb.ref("likut/" + SK).set({
+        pick:p, cust:c, tasks:t, _resetAt:now,
+        _sid: sessionId.current, _ts: now
+      }).catch(e => console.warn("FB reset:", e));
     }
   }
 
