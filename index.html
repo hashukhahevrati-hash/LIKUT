@@ -215,8 +215,9 @@ function App() {
   // ── Real-time sync ────────────────────────────────────────
   const [fbConnected, setFbConnected] = useState(false);
   const resetAtRef = React.useRef(0);
-  const sessionId = React.useRef(Math.random().toString(36).slice(2,8)); // unique per browser tab
-  const pendingEchos = React.useRef(0); // count of writes we sent, not yet echoed back
+  const sessionId = React.useRef(Math.random().toString(36).slice(2,8));
+  const pendingEchos = React.useRef(0);
+  const justReset = React.useRef(false); // blocks Firebase reads for 3s after local reset
 
   // Fix Firebase array→object conversion
   function toArr(v) {
@@ -299,26 +300,31 @@ function App() {
       db.ref(".info/connected").on("value", s => setFbConnected(!!s.val()));
       // Listen on pick changes — per settlement, so we can identify the sender
       db.ref("likut/" + SK + "/pick").on("value", snap => {
+        if (justReset.current) return; // skip all FB data for 3s after local reset
         const pickData = snap.val();
         if (!pickData) return;
-        // Check if this was sent by us (echo) — skip if so
-        let allOurs = true;
+        // Count how many entries were written by someone else
+        let foreignCount = 0;
         Object.values(pickData).forEach(entry => {
-          if (entry._sid && entry._sid !== sessionId.current) allOurs = false;
+          if (entry._sid && entry._sid !== sessionId.current) foreignCount++;
         });
-        if (allOurs && pendingEchos.current > 0) {
+        // If ALL entries are ours (or no _sid), this is our echo — skip
+        if (foreignCount === 0 && pendingEchos.current > 0) {
           pendingEchos.current = Math.max(0, pendingEchos.current - 1);
-          return; // skip own echo
+          return;
         }
         pendingEchos.current = 0;
-        // Apply only pick changes
+        // Apply only entries written by OTHER devices (foreignCount > 0)
+        // or ALL entries if we have no pending echos
         setPickState(prev => {
           const next = {...prev};
           Object.keys(pickData).forEach(sk => {
             if (!next[sk]) return;
             const entry = pickData[sk];
+            // Skip entries that are OUR echo (our _sid, pending echos)
+            if (entry._sid === sessionId.current && foreignCount === 0) return;
             const products = toArr(entry.products);
-            if (products.length > 0) {
+            if (products && products.length > 0) {
               next[sk] = {...next[sk], ...entry, products};
             }
           });
@@ -328,6 +334,7 @@ function App() {
 
       // Listen on cust changes
       db.ref("likut/" + SK + "/cust").on("value", snap => {
+        if (justReset.current) return;
         const custData = snap.val();
         if (!custData) return;
         const fixed = normCust(custData);
@@ -397,7 +404,7 @@ function App() {
     });
   }
   function setPickerName(sk, name) {
-    fbWritePickField(sk, "pickerName", name);
+    // Picker name is local only — not synced to Firebase to avoid echo issues
     setPickState(prev => ({...prev, [sk]: {...prev[sk], pickerName:name}}));
   }
 
@@ -518,6 +525,8 @@ function App() {
       const now = Date.now();
       resetAtRef.current = now;
       pendingEchos.current = 0;
+      justReset.current = true;
+      setTimeout(() => { justReset.current = false; }, 4000); // block FB reads for 4s
       // Write _resetAt first — other devices reset immediately on receiving it
       // Then write fresh state so new joins start clean
       window._fbDb.ref("likut/" + SK + "/_resetAt").set(now)
