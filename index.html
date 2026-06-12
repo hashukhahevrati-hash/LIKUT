@@ -243,6 +243,28 @@ function App() {
     if (Array.isArray(v)) return v;
     return Object.keys(v).sort((a,b)=>+a-+b).map(k=>v[k]);
   }
+  function normPick(pick) {
+    if (!pick) return {};
+    const out = {};
+    Object.keys(pick).forEach(sk => {
+      const e = pick[sk];
+      if (!e || typeof e !== 'object') return; // skip null/invalid entries
+      out[sk] = {...e, products: toArr(e.products)};
+    });
+    return out;
+  }
+  function normCust(cust) {
+    if (!cust) return {};
+    const out = {};
+    Object.keys(cust).forEach(g => {
+      const arr = toArr(cust[g]);
+      out[g] = arr.filter(c => c && typeof c === 'object').map(c => ({
+        ...c,
+        items: toArr(c.items).filter(it => it && typeof it === 'object')
+      }));
+    });
+    return out;
+  }
 
   // Apply remote state safely
   function applyRemote(d) {
@@ -326,25 +348,33 @@ function App() {
         if (!remoteSid || remoteSid === sessionId.current) return;
         // Fetch full state and apply
         db.ref("likut/" + SK).once("value").then(snap => {
-          const d = snap.val();
-          if (!d || d._sid === sessionId.current) return;
-          if (d._resetAt && d._resetAt > resetAtRef.current) {
-            resetAtRef.current = d._resetAt;
-            setPickState(initPickState());
-            setCustState(initCustState());
-            setTasks([]);
-            return;
-          }
-          if (d._resetAt && d._resetAt < resetAtRef.current) return;
-          if (d.pick) setPickState(() => {
-            const fixed = normPick(d.pick);
-            const fresh = initPickState();
-            Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
-            return fixed;
-          });
-          if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
-          if (d.tasks) setTasks(toArr(d.tasks));
-          save(d);
+          try {
+            const d = snap.val();
+            if (!d || d._sid === sessionId.current) return;
+            if (d._resetAt && d._resetAt > resetAtRef.current) {
+              resetAtRef.current = d._resetAt;
+              setPickState(initPickState());
+              setCustState(initCustState());
+              setTasks([]);
+              return;
+            }
+            if (d._resetAt && d._resetAt < resetAtRef.current) return;
+            if (d.pick) setPickState(() => {
+              try {
+                const fixed = normPick(d.pick);
+                const fresh = initPickState();
+                Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
+                return fixed;
+              } catch(e) { console.warn("pick apply error:", e); return initPickState(); }
+            });
+            if (d.cust) {
+              try {
+                setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
+              } catch(e) { console.warn("cust apply error:", e); }
+            }
+            if (d.tasks) setTasks(toArr(d.tasks));
+            save(d);
+          } catch(e) { console.warn("FB once error:", e); }
         });
       });
       // Reset listener — fast path for reset
