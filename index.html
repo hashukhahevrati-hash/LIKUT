@@ -214,6 +214,7 @@ function App() {
 
   // ── Real-time sync ────────────────────────────────────────
   const [fbConnected, setFbConnected] = useState(false);
+  const resetAtRef = React.useRef(0); // timestamp of last local reset
 
   // Fix Firebase array→object conversion
   function toArr(v) {
@@ -290,6 +291,8 @@ function App() {
         if (fbBlocking.current) return; // skip echo of own write
         const d = snap.val();
         if (!d) return;
+        // Ignore remote data that predates our local reset
+        if (d._resetAt && d._resetAt < resetAtRef.current) return;
         fbBlocking.current = true;
         applyRemote(d);
         setTimeout(() => { fbBlocking.current = false; }, 2000);
@@ -462,10 +465,12 @@ function App() {
     setPickState(p); setCustState(c); setTasks(t);
     save({pick:p, cust:c, tasks:t});
     if (USE_FIREBASE && window._fbDb) {
+      const now = Date.now();
+      resetAtRef.current = now;
       fbBlocking.current = true;
-      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t})
+      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now})
         .catch(e => console.warn("FB reset:", e));
-      setTimeout(() => { fbBlocking.current = false; }, 2000);
+      setTimeout(() => { fbBlocking.current = false; }, 3000);
     }
   }
 
