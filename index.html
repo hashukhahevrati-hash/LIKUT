@@ -261,6 +261,7 @@ function App() {
       const update = {};
       update["pick/" + sk + "/products"] = products;
       update["_sid"] = sessionId.current;
+      update["_changedSk"] = sk;
       update["_ts"] = Date.now();
       window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
     }, 300);
@@ -270,6 +271,7 @@ function App() {
     const update = {};
     update["pick/" + sk + "/" + field] = val;
     update["_sid"] = sessionId.current;
+    update["_changedSk"] = sk;
     update["_ts"] = Date.now();
     window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
   }
@@ -281,6 +283,7 @@ function App() {
       const update = {};
       update["cust/" + group] = arr;
       update["_sid"] = sessionId.current;
+      update["_changedGroup"] = group;
       update["_ts"] = Date.now();
       window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
     }, 300);
@@ -299,35 +302,41 @@ function App() {
       window._fbDb = db;
       db.ref(".info/connected").on("value", s => setFbConnected(!!s.val()));
 
-      // Single root listener — simplest and most reliable approach
-      db.ref("likut/" + SK).on("value", snap => {
-        const d = snap.val();
-        if (!d) return;
-        // Skip our own echo (we stamped _sid on every write)
-        if (d._sid === sessionId.current) return;
-        // Handle remote reset
-        if (d._resetAt && d._resetAt > resetAtRef.current) {
-          resetAtRef.current = d._resetAt;
-          const freshPick = initPickState();
-          const freshCust = initCustState();
-          setPickState(freshPick);
-          setCustState(freshCust);
-          setTasks([]);
-          save({pick: freshPick, cust: freshCust, tasks: []});
-          return;
-        }
-        // Don't apply data older than our last reset
-        if (d._resetAt && d._resetAt < resetAtRef.current) return;
-        // Apply remote state
-        if (d.pick) setPickState(() => {
-          const fixed = normPick(d.pick);
-          const fresh = initPickState();
-          Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
-          return fixed;
+      // Listen on _sid changes — fires when any device writes
+      db.ref("likut/" + SK + "/_sid").on("value", sidSnap => {
+        const remoteSid = sidSnap.val();
+        if (!remoteSid || remoteSid === sessionId.current) return;
+        // Fetch full state and apply
+        db.ref("likut/" + SK).once("value").then(snap => {
+          const d = snap.val();
+          if (!d || d._sid === sessionId.current) return;
+          if (d._resetAt && d._resetAt > resetAtRef.current) {
+            resetAtRef.current = d._resetAt;
+            setPickState(initPickState());
+            setCustState(initCustState());
+            setTasks([]);
+            return;
+          }
+          if (d._resetAt && d._resetAt < resetAtRef.current) return;
+          if (d.pick) setPickState(() => {
+            const fixed = normPick(d.pick);
+            const fresh = initPickState();
+            Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
+            return fixed;
+          });
+          if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
+          if (d.tasks) setTasks(toArr(d.tasks));
+          save(d);
         });
-        if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
-        if (d.tasks) setTasks(toArr(d.tasks));
-        save(d);
+      });
+      // Reset listener — fast path for reset
+      db.ref("likut/" + SK + "/_resetAt").on("value", snap => {
+        const r = snap.val();
+        if (!r || r <= resetAtRef.current) return;
+        resetAtRef.current = r;
+        setPickState(initPickState());
+        setCustState(initCustState());
+        setTasks([]);
       });
     } catch(e) { console.warn("FB init:", e); }
   }, []);
