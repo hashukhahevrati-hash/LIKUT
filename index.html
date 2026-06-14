@@ -292,10 +292,15 @@ function App() {
   function normPick(pick) {
     if (!pick) return {};
     const out = {};
-    Object.keys(pick).forEach(sk => {
-      const e = pick[sk];
+    // Get mapping from sanitized key back to original key
+    const allKeys = Object.keys(initPickState());
+    const keyMap = {};
+    allKeys.forEach(k => { keyMap[fbKey(k)] = k; });
+    Object.keys(pick).forEach(fbk => {
+      const e = pick[fbk];
       if (!e || typeof e !== 'object') return;
-      out[sk] = {...e, products: toArr(e.products)};
+      const origKey = keyMap[fbk] || fbk; // use original key if found
+      out[origKey] = {...e, products: toArr(e.products)};
     });
     return out;
   }
@@ -311,22 +316,27 @@ function App() {
   }
 
   // Granular writes — only changed path, not full 1.7MB
+  // Sanitize key for Firebase (no . # $ / [ ] allowed)
+  function fbKey(k) { return k.replace(/[.#$/\[\]]/g, '_'); }
+
   function fbWritePick(sk, products) {
     if (!USE_FIREBASE || !window._fbDb) return;
     if (!window._fbPickT) window._fbPickT = {};
     clearTimeout(window._fbPickT[sk]);
     window._fbPickT[sk] = setTimeout(() => {
       const u = {};
-      u['pick/' + sk + '/products'] = products;
+      u['pick/' + fbKey(sk) + '/products'] = products;
       u['_sid'] = sessionId.current;
       u['_ts']  = Date.now();
-      window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB:', e));
+      window._fbDb.ref('likut/' + SK).update(u)
+        .then(() => console.log('FB write OK:', fbKey(sk)))
+        .catch(e => console.error('FB write ERROR:', e));
     }, 300);
   }
   function fbWritePickField(sk, field, val) {
     if (!USE_FIREBASE || !window._fbDb) return;
     const u = {};
-    u['pick/' + sk + '/' + field] = val;
+    u['pick/' + fbKey(sk) + '/' + field] = val;
     u['_sid'] = sessionId.current;
     u['_ts']  = Date.now();
     window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB:', e));
@@ -337,7 +347,7 @@ function App() {
     clearTimeout(window._fbCustT[group]);
     window._fbCustT[group] = setTimeout(() => {
       const u = {};
-      u['cust/' + group] = arr;
+      u['cust/' + fbKey(group)] = arr;
       u['_sid'] = sessionId.current;
       u['_ts']  = Date.now();
       window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB:', e));
@@ -359,7 +369,9 @@ function App() {
       // Listen on _sid — fires when any device writes
       db.ref('likut/' + SK + '/_sid').on('value', snap => {
         const remoteSid = snap.val();
+        console.log('FB _sid received:', remoteSid, 'mine:', sessionId.current);
         if (!remoteSid || remoteSid === sessionId.current) return;
+        console.log('FB: applying remote changes from', remoteSid);
         // Another device wrote — fetch full state
         db.ref('likut/' + SK).once('value').then(fullSnap => {
           try {
