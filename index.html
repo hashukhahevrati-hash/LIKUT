@@ -286,6 +286,7 @@ function App() {
 
   // ── Real-time sync ────────────────────────────────────────
   const [fbConnected, setFbConnected] = useState(false);
+  const [fbLoaded, setFbLoaded] = useState(!USE_FIREBASE); // true immediately if no Firebase
   const resetAtRef  = React.useRef(0);
   const sessionId   = React.useRef(Math.random().toString(36).slice(2,8));
   const fbDone      = React.useRef(false);
@@ -356,10 +357,24 @@ function App() {
     }, 300);
   }
 
+  function fbWriteTasks(newTasks) {
+    if (!USE_FIREBASE || !window._fbDb) return;
+    clearTimeout(window._fbTaskTimer);
+    window._fbTaskTimer = setTimeout(() => {
+      const u = {};
+      u['tasks'] = newTasks;
+      u['_sid'] = sessionId.current;
+      u['_ts'] = Date.now();
+      window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB tasks:', e));
+    }, 300);
+  }
+
   // Firebase init — runs once
   useEffect(() => {
     if (!USE_FIREBASE || fbDone.current) return;
     fbDone.current = true;
+    // Fallback: if Firebase doesn't respond in 3s, show local data
+    setTimeout(() => { setFbLoaded(true); }, 3000);
     try {
       const app = firebase.apps.length
         ? firebase.apps[0]
@@ -379,6 +394,7 @@ function App() {
         // On subsequent fires: skip our own writes
         if (!firstLoad && d._sid === sessionId.current) { console.log('skipping own echo'); return; }
         firstLoad = false;
+        setFbLoaded(true); // Firebase data arrived — hide loading screen
         // Handle reset
         if (d._resetAt && d._resetAt > resetAtRef.current) {
           resetAtRef.current = d._resetAt;
@@ -555,13 +571,25 @@ function App() {
   // ── Tasks ─────────────────────────────────────────────────
   function addTask(text) {
     if (!text.trim()) return;
-    setTasks(prev => [...toArr(prev), {id:Date.now(), text:text.trim(), status:"open", createdAt:new Date().toLocaleTimeString("he-IL")}]);
+    setTasks(prev => {
+      const newTasks = [...toArr(prev), {id:Date.now(), text:text.trim(), status:"open", createdAt:new Date().toLocaleTimeString("he-IL")}];
+      fbWriteTasks(newTasks);
+      return newTasks;
+    });
   }
   function setTaskStatus(id, status) {
-    setTasks(prev => toArr(prev).map(t => t.id===id ? {...t,status} : t));
+    setTasks(prev => {
+      const newTasks = toArr(prev).map(t => t.id===id ? {...t,status} : t);
+      fbWriteTasks(newTasks);
+      return newTasks;
+    });
   }
   function deleteTask(id) {
-    setTasks(prev => toArr(prev).filter(t => t.id!==id));
+    setTasks(prev => {
+      const newTasks = toArr(prev).filter(t => t.id!==id);
+      fbWriteTasks(newTasks);
+      return newTasks;
+    });
   }
 
   // ── Reset ─────────────────────────────────────────────────
@@ -683,6 +711,17 @@ function App() {
   }
 
   // ── Routing ───────────────────────────────────────────────
+  // Show loading screen until Firebase data arrives
+  if (!fbLoaded) return (
+    <div style={{minHeight:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:"#f9fafb",fontFamily:"'Heebo','Arial Hebrew',Arial,sans-serif",direction:"rtl"}}>
+      <div style={{fontSize:40,marginBottom:16}}>🛒</div>
+      <div style={{fontSize:20,fontWeight:800,color:"#1e3a5f",marginBottom:8}}>מערכת ליקוט שוק</div>
+      <div style={{fontSize:14,color:"#6b7280",marginBottom:24}}>טוען נתונים...</div>
+      <div style={{width:48,height:48,border:"4px solid #e5e7eb",borderTop:"4px solid #2563eb",borderRadius:"50%",animation:"spin 1s linear infinite"}}/>
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+    </div>
+  );
+
   if (screen==="dashboard") return (
     <Dashboard
       pickState={pickState} custState={custState}
