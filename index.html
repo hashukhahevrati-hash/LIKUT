@@ -54,21 +54,31 @@ const FIREBASE_CONFIG = {
 const USE_FIREBASE = FIREBASE_CONFIG.apiKey !== "REPLACE_API_KEY";
 
 // ── Storage ──────────────────────────────────────────────────
+function toArr(v) {
+  if (!v) return [];
+  if (Array.isArray(v)) return v;
+  return Object.keys(v).sort((a,b)=>+a-+b).map(k=>v[k]);
+}
 function load() {
   try {
     const s = localStorage.getItem(SK);
     if (!s) return null;
     const d = JSON.parse(s);
-    // Validate basic structure
-    if (d && d.pick && typeof d.pick !== 'object') { localStorage.removeItem(SK); return null; }
-    if (d && d.cust && typeof d.cust !== 'object') { localStorage.removeItem(SK); return null; }
+    if (!d || !d.pick || !d.cust) return null;
+    // Normalize all arrays (fix Firebase object-array conversion)
+    Object.keys(d.pick).forEach(k => {
+      if (d.pick[k]) d.pick[k].products = toArr(d.pick[k].products);
+    });
+    Object.keys(d.cust).forEach(g => {
+      d.cust[g] = toArr(d.cust[g]).map(c => c ? {...c, items: toArr(c.items)} : c).filter(Boolean);
+    });
+    if (d.tasks) d.tasks = toArr(d.tasks);
     return d;
-  } catch(e) { 
-    localStorage.removeItem(SK); // clear corrupt data
-    return null; 
+  } catch(e) {
+    try { localStorage.removeItem(SK); } catch(e2) {}
+    return null;
   }
-}
-function save(s) { try { localStorage.setItem(SK,JSON.stringify(s)); } catch{} }
+}function save(s) { try { localStorage.setItem(SK,JSON.stringify(s)); } catch{} }
 
 // ── Init state ──────────────────────────────────────────────
 function parseQty(text) {
@@ -157,7 +167,7 @@ function getSettlementDone(settlement, pickState, custState) {
     const sk = "settlement_"+settlement;
     if (pickState[sk]?.done) return true;
     const ss = pickState[sk];
-    if (ss && ss.products.length > 0 && toArr(ss.products).every(p => p.picked || p.missing)) return true;
+    if (ss && ss.products.length > 0 && (Array.isArray(ss.products)?ss.products:Object.values(ss.products)).every(p => p.picked || p.missing)) return true;
     // Done if all customers are done
     const custs = custState[custGroupKey(settlement)] || [];
     if (custs.length > 0 && custs.every(c => c.done)) return true;
@@ -169,7 +179,7 @@ function getSettlementDone(settlement, pickState, custState) {
   if (pickState["settlement_"+settlement]?.done) return true;
   // OR all its products are picked/missing
   const ss = pickState["settlement_"+settlement];
-  if (ss && ss.products.length > 0 && toArr(ss.products).every(p=>p.picked||p.missing)) return true;
+  if (ss && ss.products.length > 0 && (Array.isArray(ss.products)?ss.products:Object.values(ss.products)).every(p=>p.picked||p.missing)) return true;
   return false;
 }
 
@@ -281,11 +291,7 @@ function App() {
   const justReset = React.useRef(false); // blocks Firebase reads for 3s after local reset
 
   // Fix Firebase array→object conversion
-  function toArr(v) {
-    if (!v) return [];
-    if (Array.isArray(v)) return v;
-    return Object.keys(v).sort((a,b)=>+a-+b).map(k=>v[k]);
-  }
+  // toArr defined globally above
   function normPick(pick) {
     if (!pick) return {};
     const out = {};
