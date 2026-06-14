@@ -285,19 +285,16 @@ function App() {
 
   // ── Real-time sync ────────────────────────────────────────
   const [fbConnected, setFbConnected] = useState(false);
-  const resetAtRef = React.useRef(0);
-  const sessionId = React.useRef(Math.random().toString(36).slice(2,8));
-  const pendingEchos = React.useRef(0);
-  const justReset = React.useRef(false); // blocks Firebase reads for 3s after local reset
+  const resetAtRef  = React.useRef(0);
+  const sessionId   = React.useRef(Math.random().toString(36).slice(2,8));
+  const fbDone      = React.useRef(false);
 
-  // Fix Firebase array→object conversion
-  // toArr defined globally above
   function normPick(pick) {
     if (!pick) return {};
     const out = {};
     Object.keys(pick).forEach(sk => {
       const e = pick[sk];
-      if (!e || typeof e !== 'object') return; // skip null/invalid entries
+      if (!e || typeof e !== 'object') return;
       out[sk] = {...e, products: toArr(e.products)};
     });
     return out;
@@ -306,80 +303,48 @@ function App() {
     if (!cust) return {};
     const out = {};
     Object.keys(cust).forEach(g => {
-      const arr = toArr(cust[g]);
-      out[g] = arr.filter(c => c && typeof c === 'object').map(c => ({
-        ...c,
-        items: toArr(c.items).filter(it => it && typeof it === 'object')
-      }));
+      out[g] = toArr(cust[g])
+        .filter(c => c && typeof c === 'object')
+        .map(c => ({...c, items: toArr(c.items).filter(it => it && typeof it === 'object')}));
     });
     return out;
   }
 
-  // Apply remote state safely
-  function applyRemote(d) {
-    if (d.pick) {
-      setPickState(() => {
-        const fresh = initPickState();
-        const remote = {};
-        Object.keys(d.pick).forEach(sk => {
-          const e = d.pick[sk];
-          remote[sk] = {...e, products: toArr(e.products)};
-        });
-        // Keep any keys not in remote
-        Object.keys(fresh).forEach(k => { if (!remote[k]) remote[k] = fresh[k]; });
-        return remote;
-      });
-    }
-    if (d.cust) {
-      const fixedCust = {};
-      Object.keys(d.cust).forEach(g => {
-        fixedCust[g] = toArr(d.cust[g]).map(c => ({...c, items: toArr(c.items)}));
-      });
-      setCustState(() => mergeLoadedCustState(fixedCust, initCustState()));
-    }
-    if (d.tasks) setTasks(toArr(d.tasks));
-    save(d);
-  }
-
-  // Granular Firebase writes — debounced so rapid toggles merge into one write
+  // Granular writes — only changed path, not full 1.7MB
   function fbWritePick(sk, products) {
     if (!USE_FIREBASE || !window._fbDb) return;
-    if (!window._fbPickTimers) window._fbPickTimers = {};
-    if (window._fbPickTimers[sk]) clearTimeout(window._fbPickTimers[sk]);
-    window._fbPickTimers[sk] = setTimeout(() => {
-      const update = {};
-      update["pick/" + sk + "/products"] = products;
-      update["_sid"] = sessionId.current;
-      update["_changedSk"] = sk;
-      update["_ts"] = Date.now();
-      window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
+    if (!window._fbPickT) window._fbPickT = {};
+    clearTimeout(window._fbPickT[sk]);
+    window._fbPickT[sk] = setTimeout(() => {
+      const u = {};
+      u['pick/' + sk + '/products'] = products;
+      u['_sid'] = sessionId.current;
+      u['_ts']  = Date.now();
+      window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB:', e));
     }, 300);
   }
   function fbWritePickField(sk, field, val) {
     if (!USE_FIREBASE || !window._fbDb) return;
-    const update = {};
-    update["pick/" + sk + "/" + field] = val;
-    update["_sid"] = sessionId.current;
-    update["_changedSk"] = sk;
-    update["_ts"] = Date.now();
-    window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
+    const u = {};
+    u['pick/' + sk + '/' + field] = val;
+    u['_sid'] = sessionId.current;
+    u['_ts']  = Date.now();
+    window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB:', e));
   }
   function fbWriteCust(group, arr) {
     if (!USE_FIREBASE || !window._fbDb) return;
-    if (!window._fbCustTimers) window._fbCustTimers = {};
-    if (window._fbCustTimers[group]) clearTimeout(window._fbCustTimers[group]);
-    window._fbCustTimers[group] = setTimeout(() => {
-      const update = {};
-      update["cust/" + group] = arr;
-      update["_sid"] = sessionId.current;
-      update["_changedGroup"] = group;
-      update["_ts"] = Date.now();
-      window._fbDb.ref("likut/" + SK).update(update).catch(e => console.warn("FB:", e));
+    if (!window._fbCustT) window._fbCustT = {};
+    clearTimeout(window._fbCustT[group]);
+    window._fbCustT[group] = setTimeout(() => {
+      const u = {};
+      u['cust/' + group] = arr;
+      u['_sid'] = sessionId.current;
+      u['_ts']  = Date.now();
+      window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB:', e));
     }, 300);
   }
 
-  // Init Firebase once
-  const fbDone = React.useRef(false);
+  // Firebase init — runs once
   useEffect(() => {
     if (!USE_FIREBASE || fbDone.current) return;
     fbDone.current = true;
@@ -389,45 +354,43 @@ function App() {
         : firebase.initializeApp(FIREBASE_CONFIG);
       const db = firebase.database(app);
       window._fbDb = db;
-      db.ref(".info/connected").on("value", s => setFbConnected(!!s.val()));
+      db.ref('.info/connected').on('value', s => setFbConnected(!!s.val()));
 
-      // Listen on _sid changes — fires when any device writes
-      db.ref("likut/" + SK + "/_sid").on("value", sidSnap => {
-        const remoteSid = sidSnap.val();
+      // Listen on _sid — fires when any device writes
+      db.ref('likut/' + SK + '/_sid').on('value', snap => {
+        const remoteSid = snap.val();
         if (!remoteSid || remoteSid === sessionId.current) return;
-        // Fetch full state and apply
-        db.ref("likut/" + SK).once("value").then(snap => {
+        // Another device wrote — fetch full state
+        db.ref('likut/' + SK).once('value').then(fullSnap => {
           try {
-            const d = snap.val();
+            const d = fullSnap.val();
             if (!d || d._sid === sessionId.current) return;
+            // Handle reset from another device
             if (d._resetAt && d._resetAt > resetAtRef.current) {
               resetAtRef.current = d._resetAt;
               setPickState(initPickState());
               setCustState(initCustState());
               setTasks([]);
+              save({pick: initPickState(), cust: initCustState(), tasks: []});
               return;
             }
             if (d._resetAt && d._resetAt < resetAtRef.current) return;
+            // Apply remote state
             if (d.pick) setPickState(() => {
-              try {
-                const fixed = normPick(d.pick);
-                const fresh = initPickState();
-                Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
-                return fixed;
-              } catch(e) { console.warn("pick apply error:", e); return initPickState(); }
+              const fixed = normPick(d.pick);
+              const fresh = initPickState();
+              Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
+              return fixed;
             });
-            if (d.cust) {
-              try {
-                setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
-              } catch(e) { console.warn("cust apply error:", e); }
-            }
+            if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
             if (d.tasks) setTasks(toArr(d.tasks));
             save(d);
-          } catch(e) { console.warn("FB once error:", e); }
+          } catch(e) { console.warn('FB apply error:', e); }
         });
       });
-      // Reset listener — fast path for reset
-      db.ref("likut/" + SK + "/_resetAt").on("value", snap => {
+
+      // Listen for reset from another device (fast path)
+      db.ref('likut/' + SK + '/_resetAt').on('value', snap => {
         const r = snap.val();
         if (!r || r <= resetAtRef.current) return;
         resetAtRef.current = r;
@@ -435,17 +398,16 @@ function App() {
         setCustState(initCustState());
         setTasks([]);
       });
-    } catch(e) { console.warn("FB init:", e); }
+    } catch(e) { console.warn('FB init error:', e); }
   }, []);
 
-  // localStorage only (Firebase writes are granular, called per-action)
+  // Save to localStorage on every change
   useEffect(() => {
-    save({pick:pickState, cust:custState, tasks});
+    save({pick: pickState, cust: custState, tasks});
   }, [pickState, custState, tasks]);
 
   // ── Pick helpers ──────────────────────────────────────────
   function batchToggleSettlement(updates) {
-    // updates = {sk: newProducts[], ...}
     setPickState(prev => {
       const next = {...prev};
       Object.keys(updates).forEach(sk => {
@@ -455,10 +417,9 @@ function App() {
       return next;
     });
   }
-
   function toggleItem(sk, id, field) {
     setPickState(prev => {
-      const products = prev[sk].products.map(p => {
+      const products = toArr(prev[sk].products).map(p => {
         if (p.id !== id) return p;
         const upd = {...p, [field]: !p[field]};
         if (field==="picked" && upd.picked) { upd.missing=false; upd.missingQty=0; }
@@ -472,7 +433,7 @@ function App() {
   function setItemField(sk, id, field, val) {
     setPickState(prev => ({
       ...prev,
-      [sk]: {...prev[sk], products: prev[sk].products.map(p => p.id===id ? {...p,[field]:val} : p)}
+      [sk]: {...prev[sk], products: toArr(prev[sk].products).map(p => p.id===id ? {...p,[field]:val} : p)}
     }));
   }
   function markDone(sk) {
@@ -485,16 +446,15 @@ function App() {
     });
   }
   function setPickerName(sk, name) {
-    // Picker name is local only — not synced to Firebase to avoid echo issues
     setPickState(prev => ({...prev, [sk]: {...prev[sk], pickerName:name}}));
   }
 
-  // ── Customer helpers ──────────────────────────────────────
+  // ── Customer helpers ───────────────────────────────────────
   function toggleCustItem(group, custId, itemId, field) {
     setCustState(prev => {
-      const newGroup = prev[group].map(c => c.id!==custId ? c : {
+      const newGroup = toArr(prev[group]).map(c => c.id!==custId ? c : {
         ...c,
-        items: c.items.map(it => {
+        items: toArr(c.items).map(it => {
           if (it.id!==itemId) return it;
           const upd = {...it, [field]:!it[field]};
           if (field==="picked" && upd.picked) { upd.missing=false; upd.missingQty=0; }
@@ -509,42 +469,60 @@ function App() {
   function setCustItemNote(group, custId, itemId, note) {
     setCustState(prev => ({
       ...prev,
-      [group]: prev[group].map(c => c.id!==custId ? c : {
-        ...c, items: c.items.map(it => it.id===itemId ? {...it,note} : it)
+      [group]: toArr(prev[group]).map(c => c.id!==custId ? c : {
+        ...c, items: toArr(c.items).map(it => it.id===itemId ? {...it,note} : it)
       })
     }));
   }
   function setCustNote(group, custId, note) {
-    setCustState(prev => ({...prev, [group]: prev[group].map(c => c.id===custId ? {...c,note} : c)}));
+    setCustState(prev => ({...prev, [group]: toArr(prev[group]).map(c => c.id===custId ? {...c,note} : c)}));
   }
   function setCustItemMissingQty(group, custId, itemId, qty) {
     setCustState(prev => ({
       ...prev,
-      [group]: prev[group].map(c => c.id!==custId ? c : {
-        ...c, items: c.items.map(it => it.id===itemId ? {...it, missingQty:qty} : it)
+      [group]: toArr(prev[group]).map(c => c.id!==custId ? c : {
+        ...c, items: toArr(c.items).map(it => it.id===itemId ? {...it, missingQty:qty} : it)
       })
     }));
   }
   function markCustDone(group, custId) {
     setCustState(prev => {
-      const newGroup = prev[group].map(c => c.id===custId ? {...c,done:!c.done} : c);
+      const newGroup = toArr(prev[group]).map(c => c.id===custId ? {...c,done:!c.done} : c);
+      fbWriteCust(group, newGroup);
+      return {...prev, [group]: newGroup};
+    });
+  }
+  function setCustPickerName(group, custId, name) {
+    setCustState(prev => ({
+      ...prev,
+      [group]: toArr(prev[group]).map(c => c.id===custId ? {...c, pickerName:name} : c)
+    }));
+  }
+  function setCustInProgress(group, custId, val) {
+    setCustState(prev => ({
+      ...prev,
+      [group]: toArr(prev[group]).map(c => c.id===custId ? {...c, inProgress:val} : c)
+    }));
+  }
+  function setCustLockedBy(group, custId, lockerName) {
+    setCustState(prev => {
+      const newGroup = toArr(prev[group]).map(c => c.id===custId ? {...c, lockedBy: lockerName||null} : c);
       fbWriteCust(group, newGroup);
       return {...prev, [group]: newGroup};
     });
   }
 
-  // ── Mark product as missing globally (all settlements + clusters + customer items) ──
+  // ── Mark missing globally ─────────────────────────────────
   function markProductMissingGlobal(productName, setMissing) {
-    // Update pickState: mark in ALL settlement and cluster products
     setPickState(prev => {
       const next = {...prev};
       Object.keys(next).forEach(sk => {
         const entry = next[sk];
-        const prod = entry.products.find(p => p.name === productName);
+        const prod = toArr(entry.products).find(p => p.name === productName);
         if (prod && !prod.picked) {
           next[sk] = {
             ...entry,
-            products: entry.products.map(p =>
+            products: toArr(entry.products).map(p =>
               p.name === productName && !p.picked
                 ? {...p, missing: setMissing, picked: false, missingQty: setMissing ? p.qty : 0}
                 : p
@@ -554,17 +532,15 @@ function App() {
       });
       return next;
     });
-    // Update custState: mark in ALL customer items matching this product name
     setCustState(prev => {
       const next = {...prev};
       Object.keys(next).forEach(group => {
-        next[group] = next[group].map(c => ({
+        next[group] = toArr(next[group]).map(c => ({
           ...c,
-          items: c.items.map(it => {
-            const itemProductName = it.text.replace(/^[\d.]+ \S+ - /, '');
-            if (itemProductName === productName && !it.picked) {
+          items: toArr(c.items).map(it => {
+            const name = (it.text||"").replace(/^[\d.]+ \S+ - /, '');
+            if (name === productName && !it.picked)
               return {...it, missing: setMissing, picked: false, missingQty: setMissing ? (it.maxQty||0) : 0};
-            }
             return it;
           })
         }));
@@ -573,30 +549,19 @@ function App() {
     });
   }
 
-  function setCustPickerName(group, custId, name) {
-    setCustState(prev => ({
-      ...prev,
-      [group]: prev[group].map(c => c.id===custId ? {...c, pickerName:name} : c)
-    }));
-  }
-  function setCustInProgress(group, custId, val) {
-    setCustState(prev => ({
-      ...prev,
-      [group]: prev[group].map(c => c.id===custId ? {...c, inProgress:val} : c)
-    }));
-  }
-
+  // ── Tasks ─────────────────────────────────────────────────
   function addTask(text) {
     if (!text.trim()) return;
-    setTasks(prev => [...prev, {id:Date.now(), text:text.trim(), status:"open", createdAt:new Date().toLocaleTimeString("he-IL")}]);
+    setTasks(prev => [...toArr(prev), {id:Date.now(), text:text.trim(), status:"open", createdAt:new Date().toLocaleTimeString("he-IL")}]);
   }
   function setTaskStatus(id, status) {
-    setTasks(prev => prev.map(t => t.id===id ? {...t,status} : t));
+    setTasks(prev => toArr(prev).map(t => t.id===id ? {...t,status} : t));
   }
   function deleteTask(id) {
-    setTasks(prev => prev.filter(t => t.id!==id));
+    setTasks(prev => toArr(prev).filter(t => t.id!==id));
   }
 
+  // ── Reset ─────────────────────────────────────────────────
   function resetAll() {
     if (!window.confirm("לאפס את כל נתוני הליקוט?")) return;
     const p = initPickState(), c = initCustState(), t = [];
@@ -605,16 +570,8 @@ function App() {
     if (USE_FIREBASE && window._fbDb) {
       const now = Date.now();
       resetAtRef.current = now;
-      pendingEchos.current = 0;
-      justReset.current = true;
-      setTimeout(() => { justReset.current = false; }, 4000); // block FB reads for 4s
-      // Write _resetAt first — other devices reset immediately on receiving it
-      // Then write fresh state so new joins start clean
-      // Write full reset with _sid so THIS device skips its own echo
-      window._fbDb.ref("likut/" + SK).set({
-        pick:p, cust:c, tasks:t, _resetAt:now,
-        _sid: sessionId.current, _ts: now
-      }).catch(e => console.warn("FB reset:", e));
+      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now, _sid:sessionId.current, _ts:now})
+        .catch(e => console.warn("FB reset:", e));
     }
   }
 
