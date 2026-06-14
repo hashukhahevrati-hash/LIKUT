@@ -231,6 +231,7 @@ function App() {
   const [clusterTab, setClusterTab] = useState("distribution");
   const [pickState, setPickState] = useState(() => {
     const saved = load();
+    console.log('localStorage load result:', saved ? 'HAS DATA' : 'NULL/EMPTY');
     if (!saved?.pick) return initPickState();
     // Normalize saved pick: fix Firebase-converted arrays (objects with numeric keys)
     try {
@@ -373,9 +374,10 @@ function App() {
       db.ref('likut/' + SK).on('value', snap => {
         const d = snap.val();
         if (!d) { firstLoad = false; return; }
+        console.log('FB snap received, firstLoad:', firstLoad, '_sid:', d._sid, 'mine:', sessionId.current);
         // On first load: always apply Firebase data (it's the source of truth)
         // On subsequent fires: skip our own writes
-        if (!firstLoad && d._sid === sessionId.current) return;
+        if (!firstLoad && d._sid === sessionId.current) { console.log('skipping own echo'); return; }
         firstLoad = false;
         // Handle reset
         if (d._resetAt && d._resetAt > resetAtRef.current) {
