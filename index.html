@@ -328,9 +328,10 @@ function App() {
       u['pick/' + fbKey(sk) + '/products'] = products;
       u['_sid'] = sessionId.current;
       u['_ts']  = Date.now();
+      console.log('fbWritePick writing:', JSON.stringify(Object.keys(u)));
       window._fbDb.ref('likut/' + SK).update(u)
         .then(() => console.log('FB write OK:', fbKey(sk)))
-        .catch(e => console.error('FB write ERROR:', e));
+        .catch(e => console.error('FB write ERROR:', e, 'keys:', Object.keys(u)));
     }, 300);
   }
   function fbWritePickField(sk, field, val) {
@@ -582,8 +583,21 @@ function App() {
     if (USE_FIREBASE && window._fbDb) {
       const now = Date.now();
       resetAtRef.current = now;
-      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now, _sid:sessionId.current, _ts:now})
-        .catch(e => console.warn("FB reset:", e));
+      // Sanitize pick/cust keys before writing to Firebase
+      const sanitizePick = (pick) => {
+        const out = {};
+        Object.keys(pick).forEach(k => { out[fbKey(k)] = pick[k]; });
+        return out;
+      };
+      const sanitizeCust = (cust) => {
+        const out = {};
+        Object.keys(cust).forEach(k => { out[fbKey(k)] = cust[k]; });
+        return out;
+      };
+      window._fbDb.ref("likut/" + SK).set({
+        pick: sanitizePick(p), cust: sanitizeCust(c),
+        tasks:t, _resetAt:now, _sid:sessionId.current, _ts:now
+      }).catch(e => console.warn("FB reset:", e));
     }
   }
 
