@@ -367,12 +367,16 @@ function App() {
       window._fbDb = db;
       db.ref('.info/connected').on('value', s => setFbConnected(!!s.val()));
 
+      // On first connection: always load from Firebase (ignore localStorage)
+      let firstLoad = true;
       // Listen on full state — fires on ANY change from any device
       db.ref('likut/' + SK).on('value', snap => {
         const d = snap.val();
-        if (!d) return;
-        // Skip our own writes
-        if (d._sid === sessionId.current) return;
+        if (!d) { firstLoad = false; return; }
+        // On first load: always apply Firebase data (it's the source of truth)
+        // On subsequent fires: skip our own writes
+        if (!firstLoad && d._sid === sessionId.current) return;
+        firstLoad = false;
         // Handle reset
         if (d._resetAt && d._resetAt > resetAtRef.current) {
           resetAtRef.current = d._resetAt;
