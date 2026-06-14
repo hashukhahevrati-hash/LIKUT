@@ -367,49 +367,33 @@ function App() {
       window._fbDb = db;
       db.ref('.info/connected').on('value', s => setFbConnected(!!s.val()));
 
-      // Listen on _sid — fires when any device writes
-      db.ref('likut/' + SK + '/_sid').on('value', snap => {
-        const remoteSid = snap.val();
-        console.log('FB _sid received:', remoteSid, 'mine:', sessionId.current);
-        if (!remoteSid || remoteSid === sessionId.current) return;
-        console.log('FB: applying remote changes from', remoteSid);
-        // Another device wrote — fetch full state
-        db.ref('likut/' + SK).once('value').then(fullSnap => {
-          try {
-            const d = fullSnap.val();
-            if (!d || d._sid === sessionId.current) return;
-            // Handle reset from another device
-            if (d._resetAt && d._resetAt > resetAtRef.current) {
-              resetAtRef.current = d._resetAt;
-              setPickState(initPickState());
-              setCustState(initCustState());
-              setTasks([]);
-              save({pick: initPickState(), cust: initCustState(), tasks: []});
-              return;
-            }
-            if (d._resetAt && d._resetAt < resetAtRef.current) return;
-            // Apply remote state
-            if (d.pick) setPickState(() => {
-              const fixed = normPick(d.pick);
-              const fresh = initPickState();
-              Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
-              return fixed;
-            });
-            if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
-            if (d.tasks) setTasks(toArr(d.tasks));
-            save(d);
-          } catch(e) { console.warn('FB apply error:', e); }
-        });
-      });
-
-      // Listen for reset from another device (fast path)
-      db.ref('likut/' + SK + '/_resetAt').on('value', snap => {
-        const r = snap.val();
-        if (!r || r <= resetAtRef.current) return;
-        resetAtRef.current = r;
-        setPickState(initPickState());
-        setCustState(initCustState());
-        setTasks([]);
+      // Listen on full state — fires on ANY change from any device
+      db.ref('likut/' + SK).on('value', snap => {
+        const d = snap.val();
+        if (!d) return;
+        // Skip our own writes
+        if (d._sid === sessionId.current) return;
+        // Handle reset
+        if (d._resetAt && d._resetAt > resetAtRef.current) {
+          resetAtRef.current = d._resetAt;
+          const fp = initPickState(), fc = initCustState();
+          setPickState(fp); setCustState(fc); setTasks([]);
+          save({pick:fp, cust:fc, tasks:[]});
+          return;
+        }
+        if (d._resetAt && d._resetAt < resetAtRef.current) return;
+        // Apply remote state immediately
+        try {
+          if (d.pick) setPickState(() => {
+            const fixed = normPick(d.pick);
+            const fresh = initPickState();
+            Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
+            return fixed;
+          });
+          if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
+          if (d.tasks) setTasks(toArr(d.tasks));
+          save(d);
+        } catch(e) { console.warn('FB apply error:', e); }
       });
     } catch(e) { console.warn('FB init error:', e); }
   }, []);
