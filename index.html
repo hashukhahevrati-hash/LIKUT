@@ -457,9 +457,19 @@ function App() {
     } catch(e) { console.warn('FB init error:', e); }
   }, []);
 
-  // Save to localStorage on every change
+  // Save to localStorage + trigger full Firebase sync on first meaningful change
   useEffect(() => {
     save({pick: pickState, cust: custState, tasks});
+    // Write full state to Firebase once per session (so new devices see current data)
+    // Only if we have actual data (not fresh empty state)
+    if (!fbFullSynced.current && USE_FIREBASE && window._fbDb) {
+      const hasData = Object.values(pickState).some(s =>
+        toArr(s.products).some(p => p.picked || p.missing || p.done)
+      );
+      if (hasData) {
+        fbWriteFullState(pickState);
+      }
+    }
   }, [pickState, custState, tasks]);
 
   // ── Pick helpers ──────────────────────────────────────────
@@ -483,10 +493,6 @@ function App() {
         return upd;
       });
       const next = {...prev, [sk]: {...prev[sk], products}};
-      // On first action: write FULL state to Firebase, then just the changed settlement
-      if (!fbFullSynced.current) {
-        fbWriteFullState(next);
-      }
       fbWritePick(sk, products);
       return next;
     });
