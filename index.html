@@ -407,7 +407,12 @@ function App() {
         console.log('FB snap received, firstLoad:', firstLoad, '_sid:', d._sid, 'mine:', sessionId.current);
         // On first load: always apply Firebase data (it's the source of truth)
         // On subsequent fires: skip our own writes
-        if (!firstLoad && d._sid === sessionId.current) { console.log('skipping own echo'); return; }
+        // Skip our own echo ALWAYS (even on firstLoad)
+        if (d._sid === sessionId.current) { 
+          firstLoad = false;
+          setFbLoaded(true);
+          return; 
+        }
         firstLoad = false;
         setFbLoaded(true); // Firebase data arrived — hide loading screen
         // Handle reset
