@@ -497,6 +497,188 @@ function App() {
   }, [fbConnected]);
 
 
+  // ── Pick helpers ──────────────────────────────────────────
+  function batchToggleSettlement(updates) {
+    setPickState(prev => {
+      const next = {...prev};
+      Object.keys(updates).forEach(sk => {
+        next[sk] = {...prev[sk], products: updates[sk]};
+        fbWritePick(sk, updates[sk]);
+      });
+      return next;
+    });
+  }
+  function toggleItem(sk, id, field) {
+    setPickState(prev => {
+      const products = toArr(prev[sk].products).map(p => {
+        if (p.id !== id) return p;
+        const upd = {...p, [field]: !p[field]};
+        if (field==="picked" && upd.picked) { upd.missing=false; upd.missingQty=0; }
+        if (field==="missing" && upd.missing) upd.picked=false;
+        return upd;
+      });
+      fbWritePick(sk, products);
+      return {...prev, [sk]: {...prev[sk], products}};
+    });
+  }
+  function setItemField(sk, id, field, val) {
+    setPickState(prev => ({
+      ...prev,
+      [sk]: {...prev[sk], products: toArr(prev[sk].products).map(p => p.id===id ? {...p,[field]:val} : p)}
+    }));
+  }
+  function markDone(sk) {
+    setPickState(prev => {
+      const done = !prev[sk].done;
+      const completedAt = done ? new Date().toLocaleTimeString("he-IL") : null;
+      fbWritePickField(sk, "done", done);
+      fbWritePickField(sk, "completedAt", completedAt);
+      return {...prev, [sk]: {...prev[sk], done, completedAt}};
+    });
+  }
+  function setPickerName(sk, name) {
+    setPickState(prev => ({...prev, [sk]: {...prev[sk], pickerName:name}}));
+  }
+
+  // ── Customer helpers ───────────────────────────────────────
+  function toggleCustItem(group, custId, itemId, field) {
+    setCustState(prev => {
+      const newGroup = toArr(prev[group]).map(c => c.id!==custId ? c : {
+        ...c,
+        items: toArr(c.items).map(it => {
+          if (it.id!==itemId) return it;
+          const upd = {...it, [field]:!it[field]};
+          if (field==="picked" && upd.picked) { upd.missing=false; upd.missingQty=0; }
+          if (field==="missing" && upd.missing) upd.picked=false;
+          return upd;
+        })
+      });
+      fbWriteCust(group, newGroup);
+      return {...prev, [group]: newGroup};
+    });
+  }
+  function setCustItemNote(group, custId, itemId, note) {
+    setCustState(prev => ({
+      ...prev,
+      [group]: toArr(prev[group]).map(c => c.id!==custId ? c : {
+        ...c, items: toArr(c.items).map(it => it.id===itemId ? {...it,note} : it)
+      })
+    }));
+  }
+  function setCustNote(group, custId, note) {
+    setCustState(prev => ({...prev, [group]: toArr(prev[group]).map(c => c.id===custId ? {...c,note} : c)}));
+  }
+  function setCustItemMissingQty(group, custId, itemId, qty) {
+    setCustState(prev => ({
+      ...prev,
+      [group]: toArr(prev[group]).map(c => c.id!==custId ? c : {
+        ...c, items: toArr(c.items).map(it => it.id===itemId ? {...it, missingQty:qty} : it)
+      })
+    }));
+  }
+  function markCustDone(group, custId) {
+    setCustState(prev => {
+      const newGroup = toArr(prev[group]).map(c => c.id===custId ? {...c,done:!c.done} : c);
+      fbWriteCust(group, newGroup);
+      return {...prev, [group]: newGroup};
+    });
+  }
+  function setCustPickerName(group, custId, name) {
+    setCustState(prev => ({
+      ...prev,
+      [group]: toArr(prev[group]).map(c => c.id===custId ? {...c, pickerName:name} : c)
+    }));
+  }
+  function setCustInProgress(group, custId, val) {
+    setCustState(prev => ({
+      ...prev,
+      [group]: toArr(prev[group]).map(c => c.id===custId ? {...c, inProgress:val} : c)
+    }));
+  }
+  function setCustLockedBy(group, custId, lockerName) {
+    setCustState(prev => {
+      const newGroup = toArr(prev[group]).map(c => c.id===custId ? {...c, lockedBy: lockerName||null} : c);
+      fbWriteCust(group, newGroup);
+      return {...prev, [group]: newGroup};
+    });
+  }
+
+  // ── Mark missing globally ─────────────────────────────────
+  function markProductMissingGlobal(productName, setMissing) {
+    setPickState(prev => {
+      const next = {...prev};
+      Object.keys(next).forEach(sk => {
+        const entry = next[sk];
+        const prod = toArr(entry.products).find(p => p.name === productName);
+        if (prod && !prod.picked) {
+          next[sk] = {
+            ...entry,
+            products: toArr(entry.products).map(p =>
+              p.name === productName && !p.picked
+                ? {...p, missing: setMissing, picked: false, missingQty: setMissing ? p.qty : 0}
+                : p
+            )
+          };
+        }
+      });
+      return next;
+    });
+    setCustState(prev => {
+      const next = {...prev};
+      Object.keys(next).forEach(group => {
+        next[group] = toArr(next[group]).map(c => ({
+          ...c,
+          items: toArr(c.items).map(it => {
+            const name = (it.text||"").replace(/^[\d.]+ \S+ - /, '');
+            if (name === productName && !it.picked)
+              return {...it, missing: setMissing, picked: false, missingQty: setMissing ? (it.maxQty||0) : 0};
+            return it;
+          })
+        }));
+      });
+      return next;
+    });
+  }
+
+  // ── Tasks ─────────────────────────────────────────────────
+  function addTask(text) {
+    if (!text.trim()) return;
+    setTasks(prev => {
+      const newTasks = [...toArr(prev), {id:Date.now(), text:text.trim(), status:"open", createdAt:new Date().toLocaleTimeString("he-IL")}];
+      fbWriteTasks(newTasks);
+      return newTasks;
+    });
+  }
+  function setTaskStatus(id, status) {
+    setTasks(prev => {
+      const newTasks = toArr(prev).map(t => t.id===id ? {...t,status} : t);
+      fbWriteTasks(newTasks);
+      return newTasks;
+    });
+  }
+  function deleteTask(id) {
+    setTasks(prev => {
+      const newTasks = toArr(prev).filter(t => t.id!==id);
+      fbWriteTasks(newTasks);
+      return newTasks;
+    });
+  }
+
+  // ── Reset ─────────────────────────────────────────────────
+  function resetAll() {
+    if (!window.confirm("לאפס את כל נתוני הליקוט?")) return;
+    const p = initPickState(), c = initCustState(), t = [];
+    setPickState(p); setCustState(c); setTasks(t);
+    save({pick:p, cust:c, tasks:t});
+    if (USE_FIREBASE && window._fbDb) {
+      const now = Date.now();
+      resetAtRef.current = now;
+      fbFullSynced.current = false;
+      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now, _sid:sessionId.current, _ts:now})
+        .catch(e => console.warn("FB reset:", e));
+    }
+  }
+
   // ── Global stats ──────────────────────────────────────────
   const settlementKeys = Object.keys(pickState).filter(k => k.startsWith("settlement_"));
   const totalSettlements = settlementKeys.length;
@@ -652,6 +834,47 @@ function App() {
     />;
   }
 
+  if (screen==="personal") {
+    return (
+      <div style={{minHeight:"100vh",background:"#f9fafb",fontFamily:"'Heebo','Arial Hebrew',Arial,sans-serif",direction:"rtl"}}>
+        <div style={{background:"linear-gradient(135deg,#6d28d9,#7c3aed)",color:"#fff",padding:"14px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:10}}>
+          <button onClick={()=>setScreen("home")} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",fontSize:13}}>→ חזרה</button>
+          <div style={{fontWeight:800,fontSize:18}}>📦 אריזות</div>
+        </div>
+        <div style={{padding:"12px"}}>
+          {ALL_PERSONAL.map(s => {
+            const gk = custGroupKey(s);
+            const custs = custState[gk]||[];
+            const done = custs.filter(c=>c.done).length;
+            const total2 = custs.length;
+            return (
+              <div key={s} onClick={()=>{setActiveSettlement(s);setActiveCluster(null);setScreen("settlement");}}
+                style={{background:"#fff",border:"2px solid #ddd6fe",borderRadius:14,padding:"14px",marginBottom:10,cursor:"pointer"}}>
+                <div style={{fontWeight:800,fontSize:16,color:"#6d28d9",marginBottom:4}}>{s}</div>
+                <div style={{fontSize:13,color:"#6b7280"}}>{done}/{total2} לקוחות סיימו</div>
+              </div>
+            );
+          })}
+          {Object.entries(PERSONAL_PACKING).map(([s,ppCusts])=>{
+            const gk = custGroupKey(s);
+            const custs = custState[gk]||[];
+            return ppCusts.map((ppCust,pi)=>{
+              const c = custs.find(cu=>cu.name===ppCust.name||cu.phone===ppCust.phone);
+              if(!c) return null;
+              return (
+                <div key={s+pi} onClick={()=>{setActiveSettlement(s);setActiveCustomerId(c.id);setScreen("customer");}}
+                  style={{background:"#fff",border:"2px solid #ddd6fe",borderRadius:14,padding:"14px",marginBottom:10,cursor:"pointer"}}>
+                  <div style={{fontWeight:800,fontSize:16,color:"#6d28d9"}}>{c.name}</div>
+                  <div style={{fontSize:13,color:"#6b7280"}}>{s} · {c.done?"✅ הושלם":c.items.filter(i=>i.picked).length+"/"+c.items.length+" לוקטו"}</div>
+                </div>
+              );
+            });
+          })}
+        </div>
+      </div>
+    );
+  }
+
   if (screen==="cluster" && activeCluster!==null) {
     const c = CLUSTERS[activeCluster];
     const col = CLUSTER_COLORS[activeCluster];
@@ -725,7 +948,11 @@ function App() {
             ? <div style={{fontSize:10,color:"#dc2626",fontWeight:700}}>⚠️ {missingItems} חסרים</div>
             : <div style={{fontSize:10,color:"#2563eb",fontWeight:600}}>מוצרים ←</div>}
         </div>
-        <StatBox icon="👤" val={doneCustomers+"/"+totalCustomers} lbl="אריזות" col="#7c3aed"/>
+        <div onClick={()=>setScreen("personal")} style={{flex:1,background:"#faf5ff",borderRadius:10,padding:"6px 4px",textAlign:"center",borderTop:"3px solid #7c3aed",cursor:"pointer"}}>
+          <div style={{fontSize:18}}>👤</div>
+          <div style={{fontSize:16,fontWeight:700,color:"#7c3aed"}}>{doneCustomers}/{totalCustomers}</div>
+          <div style={{fontSize:10,color:"#7c3aed",fontWeight:600}}>אריזות ←</div>
+        </div>
         <div onClick={()=>goToDashboard("missing")} style={{flex:1,background:"#fef2f2",borderRadius:10,padding:"6px 4px",textAlign:"center",cursor:"pointer",borderTop:"3px solid #dc2626"}}>
           <div style={{fontSize:18}}>⚠️</div>
           <div style={{fontSize:18,fontWeight:700,color:"#dc2626"}}>{missingItems}</div>
@@ -797,7 +1024,7 @@ function App() {
       </div>
 
       {/* Personal */}
-      <div style={S.sectionLabel}>👤 ליקוט אישי</div>
+      <div style={S.sectionLabel}>📦 אריזות</div>
       <div style={{padding:"0 12px 8px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
         {ALL_PERSONAL.map(s => {
           const gk = custGroupKey(s);
