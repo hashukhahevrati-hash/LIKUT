@@ -290,6 +290,7 @@ function App() {
   const resetAtRef  = React.useRef(0);
   const sessionId   = React.useRef(Math.random().toString(36).slice(2,8));
   const fbDone      = React.useRef(false);
+  const fbFullSynced = React.useRef(false); // true after first full state write
 
   function normPick(pick) {
     if (!pick) return {};
@@ -326,16 +327,30 @@ function App() {
     if (!window._fbPickT) window._fbPickT = {};
     clearTimeout(window._fbPickT[sk]);
     window._fbPickT[sk] = setTimeout(() => {
-      const u = {};
-      u['pick/' + fbKey(sk) + '/products'] = products;
-      u['_sid'] = sessionId.current;
-      u['_ts']  = Date.now();
-      console.log('fbWritePick writing:', JSON.stringify(Object.keys(u)));
-      window._fbDb.ref('likut/' + SK).update(u)
-        .then(() => console.log('FB write OK:', fbKey(sk)))
-        .catch(e => console.error('FB write ERROR:', e, 'keys:', Object.keys(u)));
+      const u = {'_sid': sessionId.current, '_ts': Date.now()};
+      if (!fbFullSynced.current) {
+        // First write ever — do a FULL sync so new devices see everything
+        fbFullSynced.current = true;
+        setPickState(currentPick => {
+          Object.keys(currentPick).forEach(k => {
+            u['pick/' + fbKey(k) + '/products'] = currentPick[k].products;
+            u['pick/' + fbKey(k) + '/done'] = currentPick[k].done || false;
+            u['pick/' + fbKey(k) + '/pickerName'] = currentPick[k].pickerName || '';
+          });
+          u['pick/' + fbKey(sk) + '/products'] = products; // latest change
+          window._fbDb.ref('likut/' + SK).update(u)
+            .catch(e => console.error('FB full sync ERROR:', e));
+          return currentPick;
+        });
+      } else {
+        u['pick/' + fbKey(sk) + '/products'] = products;
+        window._fbDb.ref('likut/' + SK).update(u)
+          .catch(e => console.error('FB write ERROR:', e));
+      }
     }, 300);
   }
+
+
   function fbWritePickField(sk, field, val) {
     if (!USE_FIREBASE || !window._fbDb) return;
     const u = {};
@@ -404,36 +419,47 @@ function App() {
           return;
         }
         if (d._resetAt && d._resetAt < resetAtRef.current) return;
-        // Apply remote state — merge with localStorage for missing settlements
+        // Apply remote state — NEVER go backwards (only reset button can erase data)
         try {
           const savedLocal = load();
+          const countPicked = (pick) => {
+            if (!pick) return 0;
+            return Object.values(pick).reduce((sum, entry) => {
+              return sum + toArr(entry && entry.products).filter(p => p && p.picked).length;
+            }, 0);
+          };
+          const fbPickedCount = countPicked(d.pick);
+          const localPickedCount = countPicked(savedLocal && savedLocal.pick);
+
           if (d.pick) setPickState(() => {
-            const fixed = normPick(d.pick);
+            // Start with local data as base (always preserve local progress)
+            const base = {};
             const fresh = initPickState();
-            Object.keys(fresh).forEach(k => {
-              if (!fixed[k]) {
-                // Not in Firebase — use local saved state if available
-                const localPick = savedLocal && savedLocal.pick && savedLocal.pick[k];
-                fixed[k] = localPick || fresh[k];
-              }
+            // Load local first
+            if (savedLocal && savedLocal.pick) {
+              Object.keys(fresh).forEach(k => {
+                const localEntry = savedLocal.pick[k];
+                base[k] = localEntry && toArr(localEntry.products).length > 0
+                  ? {...localEntry, products: toArr(localEntry.products)}
+                  : fresh[k];
+              });
+            } else {
+              Object.assign(base, fresh);
+            }
+            // Merge Firebase on top — only if Firebase has MORE picked for that settlement
+            const fixed = normPick(d.pick);
+            Object.keys(fixed).forEach(k => {
+              if (!base[k]) { base[k] = fixed[k]; return; }
+              const fbP = toArr(fixed[k].products).filter(p=>p.picked).length;
+              const locP = toArr(base[k].products).filter(p=>p.picked).length;
+              if (fbP > locP) base[k] = fixed[k]; // Firebase has more — use it
+              // else keep local (never go backwards)
             });
-            return fixed;
+            return base;
           });
           if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
-          if (d.tasks) setTasks(toArr(d.tasks));
+          if (d.tasks && toArr(d.tasks).length > 0) setTasks(toArr(d.tasks));
           save(d);
-          // Write full state to Firebase 2s after load to ensure consistency
-          setTimeout(() => {
-            if (!window._fbDb) return;
-            setPickState(currentPick => {
-              const u = {'_sid': sessionId.current, '_ts': Date.now()};
-              Object.keys(currentPick).forEach(k => {
-                u['pick/' + fbKey(k) + '/products'] = currentPick[k].products;
-              });
-              window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('full sync:', e));
-              return currentPick;
-            });
-          }, 2000);
         } catch(e) { console.warn('FB apply error:', e); }
       });
     } catch(e) { console.warn('FB init error:', e); }
