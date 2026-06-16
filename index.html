@@ -328,28 +328,28 @@ function App() {
     clearTimeout(window._fbPickT[sk]);
     window._fbPickT[sk] = setTimeout(() => {
       const u = {'_sid': sessionId.current, '_ts': Date.now()};
-      if (!fbFullSynced.current) {
-        // First write ever — do a FULL sync so new devices see everything
-        fbFullSynced.current = true;
-        setPickState(currentPick => {
-          Object.keys(currentPick).forEach(k => {
-            u['pick/' + fbKey(k) + '/products'] = currentPick[k].products;
-            u['pick/' + fbKey(k) + '/done'] = currentPick[k].done || false;
-            u['pick/' + fbKey(k) + '/pickerName'] = currentPick[k].pickerName || '';
-          });
-          u['pick/' + fbKey(sk) + '/products'] = products; // latest change
-          window._fbDb.ref('likut/' + SK).update(u)
-            .catch(e => console.error('FB full sync ERROR:', e));
-          return currentPick;
-        });
-      } else {
-        u['pick/' + fbKey(sk) + '/products'] = products;
-        window._fbDb.ref('likut/' + SK).update(u)
-          .catch(e => console.error('FB write ERROR:', e));
-      }
+      u['pick/' + fbKey(sk) + '/products'] = products;
+      window._fbDb.ref('likut/' + SK).update(u)
+        .catch(e => console.error('FB write ERROR:', e));
     }, 300);
   }
 
+  // Write full pickState to Firebase (called after first user action in session)
+  function fbWriteFullState(currentPick) {
+    if (!USE_FIREBASE || !window._fbDb || fbFullSynced.current) return;
+    fbFullSynced.current = true;
+    const u = {'_sid': sessionId.current, '_ts': Date.now()};
+    let totalProducts = 0;
+    Object.keys(currentPick).forEach(k => {
+      u['pick/' + fbKey(k) + '/products'] = currentPick[k].products;
+      u['pick/' + fbKey(k) + '/done'] = currentPick[k].done || false;
+      totalProducts += (currentPick[k].products || []).length;
+    });
+    console.log('FB FULL SYNC: writing', Object.keys(currentPick).length, 'settlements,', totalProducts, 'products');
+    window._fbDb.ref('likut/' + SK).update(u)
+      .then(() => console.log('FB FULL SYNC: OK'))
+      .catch(e => console.error('FB full sync ERROR:', e));
+  }
 
   function fbWritePickField(sk, field, val) {
     if (!USE_FIREBASE || !window._fbDb) return;
@@ -482,8 +482,13 @@ function App() {
         if (field==="missing" && upd.missing) upd.picked=false;
         return upd;
       });
+      const next = {...prev, [sk]: {...prev[sk], products}};
+      // On first action: write FULL state to Firebase, then just the changed settlement
+      if (!fbFullSynced.current) {
+        fbWriteFullState(next);
+      }
       fbWritePick(sk, products);
-      return {...prev, [sk]: {...prev[sk], products}};
+      return next;
     });
   }
   function setItemField(sk, id, field, val) {
