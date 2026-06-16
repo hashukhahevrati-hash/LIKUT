@@ -424,7 +424,24 @@ function App() {
         try {
           const savedLocal = load();
           const localPick = savedLocal && savedLocal.pick;
+          // Count total picked items in each source
+          const countPickedTotal = (pick) => {
+            if (!pick) return 0;
+            return Object.values(pick).reduce((sum, e) =>
+              sum + toArr(e && e.products).filter(p=>p&&(p.picked||p.missing)).length, 0);
+          };
+          const fbTotal = countPickedTotal(d.pick);
+          const localTotal = countPickedTotal(localPick);
+          console.log('FB total picked:', fbTotal, 'Local total picked:', localTotal);
+          // If local has MORE progress, skip Firebase entirely (prevents reset)
+          if (localTotal > fbTotal) {
+            console.log('Keeping local data (has more progress than Firebase)');
+            // Still show the app with local data
+            return;
+          }
           
+          console.log('Apply block: localPick keys=', localPick ? Object.keys(localPick).length : 0,
+            'FB pick keys=', d.pick ? Object.keys(d.pick).length : 0);
           setPickState(() => {
             const fresh = initPickState();
             // Start with local state (always preserve local progress)
@@ -461,12 +478,11 @@ function App() {
   useEffect(() => {
     save({pick: pickState, cust: custState, tasks});
     // Write full state to Firebase once per session (so new devices see current data)
-    // Only if we have actual data (not fresh empty state)
     if (!fbFullSynced.current && USE_FIREBASE && window._fbDb) {
-      const hasData = Object.values(pickState).some(s =>
-        toArr(s.products).some(p => p.picked || p.missing || p.done)
-      );
-      if (hasData) {
+      const pickedCount = Object.values(pickState).reduce((sum, s) =>
+        sum + toArr(s.products).filter(p => p.picked || p.missing).length, 0);
+      console.log('useEffect: pickedCount=', pickedCount, 'fbFullSynced=', fbFullSynced.current);
+      if (pickedCount > 0) {
         fbWriteFullState(pickState);
       }
     }
