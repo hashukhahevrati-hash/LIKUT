@@ -494,6 +494,14 @@ function App() {
       console.log('Auto full sync on connect');
       fbWriteFullState(pickState);
     }
+    // Also sync tasks and cust if they exist
+    if (USE_FIREBASE && window._fbDb && !fbFullSynced.current) {
+      const hasTasks = toArr(tasks).length > 0;
+      if (hasTasks) {
+        const u = {'_sid': sessionId.current, '_ts': Date.now(), 'tasks': tasks};
+        window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB tasks sync:', e));
+      }
+    }
   }, [fbConnected]);
 
 
