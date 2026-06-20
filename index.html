@@ -577,26 +577,36 @@ function App() {
   function markProductMissingGlobal(productName, setMissing) {
     setPickState(prev => {
       const next = {...prev};
+      const changedSettlements = [];
       Object.keys(next).forEach(sk => {
         const entry = next[sk];
         const prod = toArr(entry.products).find(p => p.name === productName);
         if (prod && !prod.picked) {
-          next[sk] = {
-            ...entry,
-            products: toArr(entry.products).map(p =>
-              p.name === productName && !p.picked
-                ? {...p, missing: setMissing, picked: false, missingQty: setMissing ? p.qty : 0}
-                : p
-            )
-          };
+          const newProducts = toArr(entry.products).map(p =>
+            p.name === productName && !p.picked
+              ? {...p, missing: setMissing, picked: false, missingQty: setMissing ? p.qty : 0}
+              : p
+          );
+          next[sk] = {...entry, products: newProducts};
+          changedSettlements.push(sk);
         }
       });
+      // Sync all changed settlements to Firebase in one batch update
+      if (USE_FIREBASE && window._fbDb && changedSettlements.length > 0) {
+        const u = {'_sid': sessionId.current, '_ts': Date.now()};
+        changedSettlements.forEach(sk => {
+          u['pick/' + fbKey(sk) + '/products'] = next[sk].products;
+        });
+        window._fbDb.ref('likut/' + SK).update(u)
+          .catch(e => console.warn('FB markMissing:', e));
+      }
       return next;
     });
     setCustState(prev => {
       const next = {...prev};
+      const changedGroups = [];
       Object.keys(next).forEach(group => {
-        next[group] = toArr(next[group]).map(c => ({
+        const newGroup = toArr(next[group]).map(c => ({
           ...c,
           items: toArr(c.items).map(it => {
             const name = (it.text||"").replace(/^[\d.]+ \S+ - /, '');
@@ -605,7 +615,20 @@ function App() {
             return it;
           })
         }));
+        if (JSON.stringify(newGroup) !== JSON.stringify(next[group])) {
+          changedGroups.push(group);
+        }
+        next[group] = newGroup;
       });
+      // Sync all changed customer groups to Firebase
+      if (USE_FIREBASE && window._fbDb && changedGroups.length > 0) {
+        const u = {'_sid': sessionId.current, '_ts': Date.now()};
+        changedGroups.forEach(group => {
+          u['cust/' + fbKey(group)] = next[group];
+        });
+        window._fbDb.ref('likut/' + SK).update(u)
+          .catch(e => console.warn('FB markMissing cust:', e));
+      }
       return next;
     });
   }
