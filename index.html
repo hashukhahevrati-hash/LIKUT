@@ -380,6 +380,7 @@ function App() {
       u['tasks'] = newTasks;
       u['_sid'] = sessionId.current;
       u['_ts'] = Date.now();
+      console.log('fbWriteTasks: sending update with sid', sessionId.current);
       window._fbDb.ref('likut/' + SK).update(u).catch(e => console.warn('FB tasks:', e));
     }, 300);
   }
@@ -433,7 +434,7 @@ function App() {
             return fixed;
           });
           if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
-          if (d.tasks) setTasks(toArr(d.tasks));
+          if (d.tasks) { console.log('Applying tasks from FB:', toArr(d.tasks).length); setTasks(toArr(d.tasks)); }
           save(d);
         } catch(e) { console.warn('FB apply error:', e); }
       });
@@ -614,6 +615,7 @@ function App() {
     if (!text.trim()) return;
     setTasks(prev => {
       const newTasks = [...toArr(prev), {id:Date.now(), text:text.trim(), status:"open", createdAt:new Date().toLocaleTimeString("he-IL")}];
+      console.log('addTask: writing', newTasks.length, 'tasks to Firebase');
       fbWriteTasks(newTasks);
       return newTasks;
     });
