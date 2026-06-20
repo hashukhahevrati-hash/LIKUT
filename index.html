@@ -424,55 +424,16 @@ function App() {
           return;
         }
         if (d._resetAt && d._resetAt < resetAtRef.current) return;
-        // Apply remote state — localStorage is the primary source of truth
-        // Firebase only adds data from OTHER devices, never erases local progress
+        // Apply remote state directly (from another device)
         try {
-          const savedLocal = load();
-          const localPick = savedLocal && savedLocal.pick;
-          // Count total picked items in each source
-          const countPickedTotal = (pick) => {
-            if (!pick) return 0;
-            return Object.values(pick).reduce((sum, e) =>
-              sum + toArr(e && e.products).filter(p=>p&&(p.picked||p.missing)).length, 0);
-          };
-          const fbTotal = countPickedTotal(d.pick);
-          const localTotal = countPickedTotal(localPick);
-          console.log('FB total picked:', fbTotal, 'Local total picked:', localTotal);
-          // If local has MORE progress, skip Firebase entirely (prevents reset)
-          if (localTotal > fbTotal) {
-            console.log('Keeping local data (has more progress than Firebase)');
-            // Still show the app with local data
-            return;
-          }
-          
-          console.log('Apply block: localPick keys=', localPick ? Object.keys(localPick).length : 0,
-            'FB pick keys=', d.pick ? Object.keys(d.pick).length : 0);
-          setPickState(() => {
+          if (d.pick) setPickState(() => {
+            const fixed = normPick(d.pick);
             const fresh = initPickState();
-            // Start with local state (always preserve local progress)
-            const result = {};
-            Object.keys(fresh).forEach(k => {
-              const loc = localPick && localPick[k];
-              if (loc && toArr(loc.products).length > 0) {
-                result[k] = {...loc, products: toArr(loc.products)};
-              } else {
-                result[k] = fresh[k];
-              }
-            });
-            // Merge Firebase on top — only add where Firebase has MORE progress
-            if (d.pick) {
-              const fixed = normPick(d.pick);
-              Object.keys(fixed).forEach(k => {
-                if (!result[k]) { result[k] = fixed[k]; return; }
-                const fbPicked = toArr(fixed[k].products).filter(p=>p.picked||p.missing).length;
-                const locPicked = toArr(result[k].products).filter(p=>p.picked||p.missing).length;
-                if (fbPicked > locPicked) result[k] = fixed[k];
-              });
-            }
-            return result;
+            Object.keys(fresh).forEach(k => { if (!fixed[k]) fixed[k] = fresh[k]; });
+            return fixed;
           });
           if (d.cust) setCustState(() => mergeLoadedCustState(normCust(d.cust), initCustState()));
-          if (d.tasks && toArr(d.tasks).length > 0) setTasks(toArr(d.tasks));
+          if (d.tasks) setTasks(toArr(d.tasks));
           save(d);
         } catch(e) { console.warn('FB apply error:', e); }
       });
