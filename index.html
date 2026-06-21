@@ -1727,6 +1727,14 @@ function CustomerPickScreen({settlement,customer,onToggle,onSetItemNote,onSetNot
 // ── Dashboard ──────────────────────────────────────────────────
 function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDeleteTask,activeTab,onTabChange,onBack,onNavigate,onMarkMissingGlobal}) {
   const [showProdModal, setShowProdModal] = useState(false);
+  const [expandedProducts, setExpandedProducts] = useState(new Set());
+  function toggleProduct(key) {
+    setExpandedProducts(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  }
   const settlementKeys=Object.keys(pickState).filter(k=>k.startsWith("settlement_"));
   const totalS=settlementKeys.length;
   const doneS=settlementKeys.filter(k=>getSettlementDone(k.replace("settlement_",""),pickState,custState)).length;
@@ -1864,7 +1872,7 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
           {t:"overview",icon:"🏘️",val:doneS+"/"+totalS,lbl:"יישובים",col:"#16a34a"},
           {t:"__products__",icon:"📦",val:pickedI+"/"+totalI,lbl:totalMissingQty>0?"⚠️ "+Math.round(totalMissingQty)+" חסרים":"פריטים",col:totalMissingQty>0?"#dc2626":"#2563eb"},
           {t:"missing",icon:"⚠️",val:Math.round(totalMissingQty),lbl:"חסרים",col:"#dc2626"},
-          {t:"notpicked",icon:"🟡",val:notPickedI,lbl:"ממתינים",col:"#f59e0b"},
+          {t:"pickers",icon:"👷",val:(()=>{const ps={};Object.keys(pickState).forEach(k=>{const p=pickState[k].pickerName;if(p)String(p).split(",").map(n=>n.trim()).filter(Boolean).forEach(n=>ps[n]=1);});Object.keys(custState).forEach(g=>{(custState[g]||[]).forEach(c=>{if(c.pickerName)ps[c.pickerName]=1;});});return Object.keys(ps).length;})(),lbl:"מלקטים",col:"#0369a1"},
           {t:"tasks",icon:"📋",val:toArr(tasks||[]).filter(t=>t.status!=="done").length,lbl:"משימות",col:"#7c3aed"},
           {t:"personal_missing",icon:"🎁",val:personalMissingList.length,lbl:"אריזה אישית",col:"#0d9488"},
         ].map((box,i)=>(
@@ -1927,6 +1935,37 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
             );
           })()}
 
+          {/* 1.5 — מוצרים לא מסומנים ביישובים שכבר התחילו ליקוט */}
+          {(() => {
+            const partial = [];
+            settlementKeys.forEach(k=>{
+              const settlement = k.replace("settlement_","");
+              const ss = pickState[k];
+              if (!ss) return;
+              const prods = toArr(ss.products);
+              if (prods.length===0) return;
+              const pickedOrMissing = prods.filter(p=>p.picked||p.missing).length;
+              const unmarked = prods.length - pickedOrMissing;
+              // Only settlements with SOME progress (not 0) but still have unmarked items
+              if (pickedOrMissing>0 && unmarked>0) {
+                partial.push({settlement, picker:ss.pickerName||"", unmarked, total:prods.length, picked:pickedOrMissing});
+              }
+            });
+            const totalUnmarked = partial.reduce((a,p)=>a+p.unmarked,0);
+            return (
+              <div onClick={()=>onTabChange("unmarked")} style={{background:totalUnmarked>0?"#fff7ed":"#f0fdf4",border:"1px solid "+(totalUnmarked>0?"#fdba74":"#86efac"),borderRadius:14,padding:"14px",marginBottom:10,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div>
+                  <div style={{fontWeight:800,fontSize:15,color:totalUnmarked>0?"#c2410c":"#15803d"}}>🔍 מוצרים לא מסומנים בליקוט פעיל</div>
+                  <div style={{fontSize:12,color:"#6b7280",marginTop:4}}>{partial.length} יישובים עם ליקוט חלקי</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:32,fontWeight:800,color:totalUnmarked>0?"#c2410c":"#16a34a"}}>{totalUnmarked}</div>
+                  <div style={{fontSize:10,color:"#9ca3af"}}>← פירוט</div>
+                </div>
+              </div>
+            );
+          })()}
+
           {/* 2. חוסרים */}
           <div onClick={()=>onTabChange("missing")} style={{background:totalMissingQty>0?"#fef2f2":"#f0fdf4",border:"1px solid "+(totalMissingQty>0?"#fca5a5":"#86efac"),borderRadius:14,padding:"14px",marginBottom:10,cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
             <div>
@@ -1976,18 +2015,52 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
 
 
 
-          {/* Untracked warning */}
+          {/* Untracked warning — items missed despite settlement marked done */}
           {doneWithUntracked.length>0&&(
             <div style={{background:"#fffbeb",border:"2px solid #f59e0b",borderRadius:12,padding:"12px 14px",marginBottom:10}}>
-              <div style={{fontWeight:700,color:"#92400e",fontSize:13,marginBottom:8}}>⚠️ יישובים שהושלמו עם פריטים לא מסומנים:</div>
-              {doneWithUntracked.map((d,i)=>(
-                <div key={i} style={{background:"#fff",border:"1px solid #fde68a",borderRadius:8,padding:"8px 12px",marginBottom:6}}>
-                  <div style={{display:"flex",justifyContent:"space-between"}}>
-                    <span style={{fontWeight:700,color:"#92400e"}}>{d.settlement}</span>
-                    <span style={{fontSize:11,color:"#f59e0b"}}>{d.items.length} פריטים</span>
+              <div style={{fontWeight:700,color:"#92400e",fontSize:13,marginBottom:8}}>⚠️ סומן "הושלם" אך נשארו פריטים לא מסומנים — בדיקת טעויות:</div>
+              {doneWithUntracked.map((d,i)=>{
+                const key = "untracked_"+i;
+                const isOpen = expandedProducts.has(key);
+                return (
+                <div key={i} style={{background:"#fff",border:"1px solid #fde68a",borderRadius:8,marginBottom:6,overflow:"hidden"}}>
+                  <div onClick={()=>toggleProduct(key)}
+                    style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 12px",cursor:"pointer"}}>
+                    <div>
+                      <span style={{fontWeight:700,color:"#92400e"}}>{d.settlement}</span>
+                      {d.picker&&<span style={{fontSize:11,color:"#9ca3af",marginRight:6}}>· 👷{d.picker}</span>}
+                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:6}}>
+                      <span style={{fontSize:11,background:"#fef3c7",color:"#92400e",padding:"2px 8px",borderRadius:20,fontWeight:700}}>{d.items.length} פריטים</span>
+                      <span style={{fontSize:13,color:"#92400e",display:"inline-block",transform:isOpen?"rotate(90deg)":"rotate(0deg)"}}>›</span>
+                    </div>
                   </div>
+                  {isOpen && (
+                    <div style={{borderTop:"1px solid #fde68a"}}>
+                      {d.items.map((it,ii)=>(
+                        <div key={ii}
+                          onClick={()=>{
+                            if (d.isCustomer) {
+                              const gk = custGroupKey(it.settlement||d.settlement);
+                              const custs = custState[gk]||[];
+                              const cust = custs.find(c=>c.name===it.customer);
+                              if (cust) onNavigate(d.settlement, cust.id);
+                            } else {
+                              onNavigate(d.settlement);
+                            }
+                          }}
+                          style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 12px",borderBottom:ii<d.items.length-1?"1px solid #fffbeb":"none",background:ii%2===0?"#fffdf5":"#fff",cursor:"pointer"}}>
+                          <span style={{fontSize:12,color:"#374151"}}>
+                            {d.isCustomer? (it.customer+" — "+it.productName) : it.productName}
+                          </span>
+                          <span style={{fontSize:12,color:"#f59e0b"}}>›</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </>}
@@ -2041,52 +2114,173 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
         )}
 
         {/* Not picked */}
-        {activeTab==="notpicked"&&(
-          allNotPicked.length===0
-            ? <div style={{textAlign:"center",color:"#16a34a",padding:"40px 0",fontSize:16}}>✅ הכל לוקט!</div>
-            : <>
-                <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",justifyContent:"space-between"}}>
-                  <span style={{fontWeight:700,color:"#92400e",fontSize:13}}>🟡 {notPickedI} פריטים ממתינים</span>
-                  <span style={{fontSize:11,color:"#9ca3af"}}>{Object.keys(notPickedBySett).length} יישובים</span>
+        {/* Unmarked products in actively-picked settlements (mistake detector) */}
+        {activeTab==="unmarked"&&(
+          (() => {
+            const partial = [];
+            settlementKeys.forEach(k=>{
+              const settlement = k.replace("settlement_","");
+              const ss = pickState[k];
+              if (!ss) return;
+              const prods = toArr(ss.products);
+              if (prods.length===0) return;
+              const pickedOrMissing = prods.filter(p=>p.picked||p.missing);
+              const unmarkedItems = prods.filter(p=>!p.picked&&!p.missing);
+              if (pickedOrMissing.length>0 && unmarkedItems.length>0) {
+                partial.push({settlement, picker:ss.pickerName||"", items:unmarkedItems, total:prods.length, picked:pickedOrMissing.length});
+              }
+            });
+            if (partial.length===0) return (
+              <div style={{textAlign:"center",color:"#16a34a",padding:"40px 0",fontSize:16}}>✅ אין מוצרים לא מסומנים בליקוט פעיל!</div>
+            );
+            return (
+              <>
+                <div style={{background:"#fff7ed",border:"1px solid #fdba74",borderRadius:10,padding:"10px 14px",marginBottom:12}}>
+                  <span style={{fontWeight:700,color:"#c2410c",fontSize:13}}>🔍 {partial.length} יישובים עם ליקוט חלקי ומוצרים לא מסומנים</span>
                 </div>
-                {Object.entries(notPickedBySett).sort(([a],[b])=>a.localeCompare(b,"he")).map(([settlement,{picker,items}])=>{
-                  const reg=items.filter(m=>!m.isCustomer), cust=items.filter(m=>m.isCustomer);
+                {partial.map((p,i)=>{
+                  const key = "unmarked_"+i;
+                  const isOpen = expandedProducts.has(key);
                   return (
-                    <div key={settlement} style={{background:"#fff",border:"2px solid #fde68a",borderRadius:12,marginBottom:10,overflow:"hidden"}}>
-                      <div style={{background:"#fffbeb",padding:"10px 14px",borderBottom:"1px solid #fde68a",display:"flex",justifyContent:"space-between"}}>
-                        <div>
-                          <span style={{fontWeight:800,fontSize:15,color:"#92400e"}}>🟡 {settlement}</span>
-                          <span style={{fontSize:11,color:"#78350f",display:"block",marginTop:2}}>
-                            {reg.length>0?reg.length+" פריטים":""}{reg.length>0&&cust.length>0?" · ":""}{cust.length>0?cust.length+" אריזות אישיות":""}
-                          </span>
-                        </div>
-                        {picker&&<span style={{fontSize:11,color:"#7c3aed",fontWeight:600}}>👷 {picker}</span>}
+                  <div key={i} style={{background:"#fff",border:"2px solid #fed7aa",borderRadius:12,marginBottom:8,overflow:"hidden"}}>
+                    <div onClick={()=>toggleProduct(key)}
+                      style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"10px 14px",cursor:"pointer",background:"#fff7ed"}}>
+                      <div>
+                        <span style={{fontWeight:800,fontSize:14,color:"#c2410c"}}>{p.settlement}</span>
+                        {p.picker&&<span style={{fontSize:11,color:"#9ca3af",marginRight:6}}>· 👷{p.picker}</span>}
+                        <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>{p.picked}/{p.total} מוצרים סומנו</div>
                       </div>
-                      {reg.map((m,i)=>(
-                        <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"9px 14px",borderBottom:i<reg.length-1?"1px solid #fef9c3":"none",background:i%2===0?"#fff":"#fffde7"}}>
-                          <span style={{fontSize:13,fontWeight:700,color:"#374151"}}>{m.productName}</span>
-                          <div style={{textAlign:"center"}}>
-                            <div style={{fontSize:14,fontWeight:800,color:"#92400e"}}>{m.qty}</div>
-                            <div style={{fontSize:10,color:"#9ca3af"}}>{m.unit}</div>
+                      <div style={{display:"flex",alignItems:"center",gap:6}}>
+                        <span style={{fontSize:11,background:"#fed7aa",color:"#c2410c",padding:"2px 8px",borderRadius:20,fontWeight:700}}>{p.items.length} לא מסומנים</span>
+                        <span style={{fontSize:13,color:"#c2410c",display:"inline-block",transform:isOpen?"rotate(90deg)":"rotate(0deg)"}}>›</span>
+                      </div>
+                    </div>
+                    {isOpen && (
+                      <div style={{borderTop:"1px solid #fed7aa"}}>
+                        {p.items.map((it,ii)=>(
+                          <div key={ii} onClick={()=>onNavigate(p.settlement)}
+                            style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 14px",borderBottom:ii<p.items.length-1?"1px solid #fff7ed":"none",background:ii%2===0?"#fffaf3":"#fff",cursor:"pointer"}}>
+                            <span style={{fontSize:13,color:"#374151"}}>{it.name}</span>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontSize:12,color:"#9ca3af"}}>{it.qty} {it.unit}</span>
+                              <span style={{fontSize:12,color:"#c2410c"}}>›</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  );
+                })}
+              </>
+            );
+          })()
+        )}
+
+        {activeTab==="pickers"&&(
+          (() => {
+            // Build pickers map: name → [{type, label, settlement, custId, total, picked, done}]
+            const pickersMap = {};
+            const addEntry = (name, entry) => {
+              if (!name) return;
+              String(name).split(",").map(n=>n.trim()).filter(Boolean).forEach(n=>{
+                if (!pickersMap[n]) pickersMap[n] = [];
+                pickersMap[n].push(entry);
+              });
+            };
+            // Settlements (incl. clusters/aggregates and regular settlements)
+            Object.keys(pickState).forEach(k=>{
+              const ss = pickState[k];
+              if (!ss || !ss.pickerName) return;
+              const arr = Array.isArray(ss.products)?ss.products:toArr(ss.products);
+              const total = Math.round(arr.reduce((a,p)=>a+(p.qty||0),0));
+              const picked = Math.round(arr.filter(p=>p.picked).reduce((a,p)=>a+(p.qty||0),0));
+              const isCluster = k.startsWith("cluster_");
+              const label = isCluster
+                ? (CLUSTERS.find(c=>"cluster_"+c.id===k)||{}).name || k
+                : k.replace("settlement_","");
+              const done = ss.done || (arr.length>0 && arr.every(p=>p.picked||p.missing));
+              addEntry(ss.pickerName, {type:isCluster?"cluster":"settlement",label,total,picked,done,navKey:isCluster?null:label});
+            });
+            // Personal packing customers (picked by name on the customer card)
+            Object.keys(custState).forEach(group=>{
+              (custState[group]||[]).forEach(c=>{
+                if (!c.pickerName) return;
+                const items = Array.isArray(c.items)?c.items:toArr(c.items);
+                const total = items.length;
+                const picked = items.filter(it=>it.picked).length;
+                addEntry(c.pickerName, {type:"customer",label:c.name,settlement:group,custId:c.id,total,picked,done:!!c.done});
+              });
+            });
+            const pickerNames = Object.keys(pickersMap).sort((a,b)=>a.localeCompare(b,"he"));
+            if (pickerNames.length===0) return (
+              <div style={{textAlign:"center",color:"#9ca3af",padding:"40px 0",fontSize:14}}>
+                אין מלקטים רשומים עדיין
+              </div>
+            );
+            return (
+              <>
+                <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{fontWeight:700,color:"#1d4ed8",fontSize:13}}>👷 {pickerNames.length} מלקטים רשומים</span>
+                  <span style={{fontSize:11,color:"#9ca3af"}}>{Object.values(pickersMap).reduce((a,v)=>a+v.length,0)} משימות</span>
+                </div>
+                {pickerNames.map(name=>{
+                  const entries = pickersMap[name];
+                  const isOpen = expandedProducts.has("picker_"+name);
+                  const doneCount = entries.filter(e=>e.done).length;
+                  const totalPicked = entries.reduce((a,e)=>a+e.picked,0);
+                  const totalItems = entries.reduce((a,e)=>a+e.total,0);
+                  const pct = Math.round(totalPicked/Math.max(totalItems,1)*100);
+                  const allDone = doneCount===entries.length;
+                  return (
+                    <div key={name} style={{background:"#fff",border:"2px solid "+(allDone?"#86efac":"#bfdbfe"),borderRadius:12,marginBottom:8,overflow:"hidden"}}>
+                      <div onClick={()=>toggleProduct("picker_"+name)}
+                        style={{background:allDone?"#f0fdf4":"#eff6ff",padding:"10px 14px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer",borderBottom:isOpen?"1px solid "+(allDone?"#bbf7d0":"#bfdbfe"):"none"}}>
+                        <div style={{flex:1}}>
+                          <div style={{fontWeight:800,fontSize:14,color:allDone?"#15803d":"#1d4ed8"}}>👷 {name}</div>
+                          <div style={{fontSize:11,color:"#6b7280",marginTop:2}}>
+                            {entries.length} מיקומים · {doneCount}/{entries.length} הושלמו · {totalPicked}/{totalItems} פריטים
+                          </div>
+                        </div>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <div style={{width:36,height:36,borderRadius:"50%",background:allDone?"#16a34a":"#2563eb",display:"flex",alignItems:"center",justifyContent:"center"}}>
+                            <span style={{fontSize:12,fontWeight:800,color:"#fff"}}>{pct}%</span>
+                          </div>
+                          <span style={{fontSize:14,color:allDone?"#15803d":"#1d4ed8",display:"inline-block",transform:isOpen?"rotate(90deg)":"rotate(0deg)"}}>›</span>
+                        </div>
+                      </div>
+                      <div style={{height:4,background:"#e5e7eb",overflow:"hidden"}}>
+                        <div style={{height:"100%",width:pct+"%",background:allDone?"#16a34a":"#2563eb",transition:"width 0.3s"}}/>
+                      </div>
+                      {isOpen && entries.map((e,ei)=>(
+                        <div key={ei}
+                          onClick={()=>{
+                            if (e.type==="customer") onNavigate(e.settlement, e.custId);
+                            else if (e.navKey) onNavigate(e.navKey);
+                          }}
+                          style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"9px 14px",borderBottom:ei<entries.length-1?"1px solid #eff6ff":"none",background:e.done?(ei%2===0?"#f0fdf4":"#dcfce7"):(ei%2===0?"#fff":"#f8fafc"),cursor:e.type==="cluster"&&!e.navKey?"default":"pointer"}}>
+                          <div>
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <span style={{fontSize:11,background:e.type==="cluster"?"#dbeafe":e.type==="customer"?"#faf5ff":"#f3f4f6",color:e.type==="cluster"?"#1d4ed8":e.type==="customer"?"#7c3aed":"#374151",padding:"1px 6px",borderRadius:6,fontWeight:600}}>
+                                {e.type==="cluster"?"מקבץ":e.type==="customer"?"אריזה אישית":"יישוב"}
+                              </span>
+                              <span style={{fontSize:13,fontWeight:700,color:e.done?"#15803d":"#111"}}>{e.label}</span>
+                              {e.done&&<span style={{fontSize:11}}>✅</span>}
+                            </div>
+                            {e.type==="customer"&&<div style={{fontSize:11,color:"#9ca3af",marginTop:1}}>{e.settlement}</div>}
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <span style={{fontSize:12,fontWeight:700,color:e.done?"#15803d":"#2563eb"}}>{e.picked}/{e.total}</span>
+                            <span style={{fontSize:13,color:"#9ca3af"}}>›</span>
                           </div>
                         </div>
                       ))}
-                      {cust.length>0&&<>
-                        <div style={{padding:"6px 14px",background:"#faf5ff",borderTop:reg.length>0?"2px dashed #fde68a":"none",fontSize:11,color:"#7c3aed",fontWeight:600}}>👤 אריזה אישית:</div>
-                        {cust.map((m,i)=>(
-                          <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 14px",borderBottom:i<cust.length-1?"1px solid #f3f4f6":"none",background:i%2===0?"#faf5ff":"#f5f3ff"}}>
-                            <div>
-                              <div style={{fontSize:12,fontWeight:700,color:"#6d28d9"}}>{m.customer}</div>
-                              <div style={{fontSize:13,color:"#374151"}}>{m.productName}</div>
-                            </div>
-                            <span style={{fontSize:11,background:"#fef3c7",color:"#92400e",padding:"3px 10px",borderRadius:20,fontWeight:700,alignSelf:"center"}}>🟡</span>
-                          </div>
-                        ))}
-                      </>}
                     </div>
                   );
                 })}
               </>
+            );
+          })()
         )}
 
         {/* Personal missing inside missing tab too */}
@@ -2158,7 +2352,7 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
                         <div style={{fontSize:11,color:"#15803d",fontWeight:700,marginBottom:6}}>✅ לוקטו ({done.length})</div>
                         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                           {done.map((c,i)=>(
-                            <div key={i} style={{background:"#f0fdf4",border:"1px solid #86efac",borderRadius:8,padding:"4px 10px",fontSize:12,color:"#15803d",fontWeight:600}}>
+                            <div key={i} onClick={()=>onNavigate(sett,c.id)} style={{background:"#f0fdf4",border:"1px solid #86efac",borderRadius:8,padding:"4px 10px",fontSize:12,color:"#15803d",fontWeight:600,cursor:"pointer"}}>
                               {c.name}
                               {c.pickerName&&<span style={{fontSize:10,color:"#9ca3af",marginRight:4}}>· 👷{c.pickerName}</span>}
                             </div>
@@ -2186,7 +2380,7 @@ function Dashboard({pickState,custState,tasks,onAddTask,onSetTaskStatus,onDelete
                         <div style={{fontSize:11,color:"#9ca3af",fontWeight:700,marginBottom:6}}>⏳ ממתינים ({waiting.length})</div>
                         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                           {waiting.map((c,i)=>(
-                            <div key={i} style={{background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:8,padding:"4px 10px",fontSize:12,color:"#6b7280"}}>
+                            <div key={i} onClick={()=>onNavigate(sett,c.id)} style={{background:"#f9fafb",border:"1px solid #e5e7eb",borderRadius:8,padding:"4px 10px",fontSize:12,color:"#6b7280",cursor:"pointer"}}>
                               {c.name}
                             </div>
                           ))}
