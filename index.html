@@ -674,8 +674,15 @@ function App() {
       const now = Date.now();
       resetAtRef.current = now;
       fbFullSynced.current = false;
-      window._fbDb.ref("likut/" + SK).set({pick:p, cust:c, tasks:t, _resetAt:now, _sid:sessionId.current, _ts:now})
-        .catch(e => console.warn("FB reset:", e));
+      // Sanitize keys before writing to Firebase (settlement names may contain /)
+      const sanitizedPick = {};
+      Object.keys(p).forEach(k => { sanitizedPick[fbKey(k)] = p[k]; });
+      const sanitizedCust = {};
+      Object.keys(c).forEach(k => { sanitizedCust[fbKey(k)] = c[k]; });
+      window._fbDb.ref("likut/" + SK).set({
+        pick: sanitizedPick, cust: sanitizedCust, tasks:t,
+        _resetAt:now, _sid:sessionId.current, _ts:now
+      }).catch(e => console.warn("FB reset:", e));
     }
   }
 
