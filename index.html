@@ -575,6 +575,7 @@ function App() {
 
   // ── Mark missing globally ─────────────────────────────────
   function markProductMissingGlobal(productName, setMissing) {
+    console.log('markProductMissingGlobal called:', productName, 'setMissing:', setMissing);
     setPickState(prev => {
       const next = {...prev};
       const changedSettlements = [];
@@ -592,13 +593,18 @@ function App() {
         }
       });
       // Sync all changed settlements to Firebase in one batch update
+      console.log('markMissing: changed settlements =', changedSettlements.length, changedSettlements);
       if (USE_FIREBASE && window._fbDb && changedSettlements.length > 0) {
         const u = {'_sid': sessionId.current, '_ts': Date.now()};
         changedSettlements.forEach(sk => {
           u['pick/' + fbKey(sk) + '/products'] = next[sk].products;
         });
+        console.log('markMissing: writing to FB, keys:', Object.keys(u));
         window._fbDb.ref('likut/' + SK).update(u)
-          .catch(e => console.warn('FB markMissing:', e));
+          .then(() => console.log('markMissing: FB write OK'))
+          .catch(e => console.error('FB markMissing ERROR:', e));
+      } else {
+        console.log('markMissing: SKIPPED FB write. USE_FIREBASE=', USE_FIREBASE, '_fbDb=', !!window._fbDb, 'changed=', changedSettlements.length);
       }
       return next;
     });
